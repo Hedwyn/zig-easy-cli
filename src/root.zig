@@ -32,6 +32,16 @@ const FlagType = enum {
     LongFlag,
 };
 
+/// Init all optional fields to null in a struct
+fn initOptionals(comptime T: type, container: *T) void {
+    inline for (std.meta.fields(T)) |field| {
+        switch (@typeInfo(field.type)) {
+            .Optional => @field(container, field.name) = null,
+            else => continue,
+        }
+    }
+}
+
 pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
     return struct {
         context: CliContext,
@@ -78,6 +88,8 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
         pub fn parse(self: Self, arg_it: anytype) CliError!Params {
             const options: *OptionT = self.allocator.create(OptionT) catch return CliError.MemoryError;
             const arguments: *ArgT = self.allocator.create(ArgT) catch return CliError.MemoryError;
+            initOptionals(OptionT, options);
+            initOptionals(ArgT, arguments);
             const params = Params{ .options = options, .arguments = arguments };
 
             var is_option: bool = false;
