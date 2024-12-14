@@ -54,6 +54,7 @@ fn autoCast(comptime T: type, value_str: []const u8) CliError!T {
         .Float => std.fmt.parseFloat(T, value_str) catch {
             return CliError.IncorrectArgumentType;
         },
+        .Optional => |option| try autoCast(option.child, value_str),
         else => unreachable,
     };
 }
@@ -94,7 +95,10 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                 else => return .InvalidContainer,
             };
             inline for (0.., struct_info.fields) |i, field| {
+                std.debug.print("Finding arg for {} {}\n", .{ i, arg_idx });
                 if (i == arg_idx) {
+                    std.debug.print("Found {s} \n", .{field.name});
+
                     return field.name;
                 }
             }
@@ -112,6 +116,8 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             var ctx = self.context;
             var flag_type: ?FlagType = null;
             var current_arg_name: []const u8 = "";
+            var arg_idx: usize = 0;
+
             // If no explicit client name was passed,using process name
             const process_name: []const u8 = arg_it.next() orelse return CliError.EmptyArguments;
             ctx.name = ctx.name orelse process_name;
@@ -119,19 +125,18 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             var consume = true;
 
             while (next_arg) |arg| {
-                var arg_idx: usize = 0;
                 consume = true;
                 // consume will be set to false if we have an argument
                 defer next_arg = if (consume) arg_it.next() else next_arg;
 
                 if (flag_type) |flag| {
+                    defer flag_type = null;
                     if (is_option) {
                         try self.parseArg(OptionT, current_arg_name, arg, flag, options);
                     } else {
                         try self.parseArg(ArgT, current_arg_name, arg, flag, arguments);
                     }
                     // consuming flag type
-                    flag_type = null;
                     continue;
                 }
                 flag_type = .Argument;
@@ -179,13 +184,28 @@ test "parse with string parameters only" {
     try std.testing.expectEqualStrings("Argument1", params.options.arg_1.?);
 }
 
-test "parse with arguments" {
+test "parse single argument" {
     const prompt = "testcli Argument1";
     var arguments = std.mem.split(u8, prompt, " ");
     const allocator = std.heap.page_allocator;
     const ctx = CliContext{};
     const Params = struct {
         arg_1: ?[]const u8 = null,
+    };
+    const parser = CliParser(struct {}, Params){ .context = ctx, .allocator = allocator };
+    const params = try parser.parse(&arguments);
+    try std.testing.expectEqualStrings("Argument1", params.arguments.arg_1.?);
+}
+
+test "parse many arguments" {
+    std.debug.print("Many arguments\n\n", .{});
+    const prompt = "testcli Argument1 Argument2";
+    var arguments = std.mem.split(u8, prompt, " ");
+    const allocator = std.heap.page_allocator;
+    const ctx = CliContext{};
+    const Params = struct {
+        arg_1: ?[]const u8 = null,
+        arg_2: ?[]const u8 = null,
     };
     const parser = CliParser(struct {}, Params){ .context = ctx, .allocator = allocator };
     const params = try parser.parse(&arguments);
@@ -203,4 +223,17 @@ test "parse integer argument" {
     const parser = CliParser(struct {}, Params){ .context = ctx, .allocator = allocator };
     const params = try parser.parse(&arguments);
     try std.testing.expectEqual(42, params.arguments.arg_1);
+}
+
+test "parse float argument" {
+    const prompt = "testcli 3.14";
+    var arguments = std.mem.split(u8, prompt, " ");
+    const allocator = std.heap.page_allocator;
+    const ctx = CliContext{};
+    const Params = struct {
+        arg_1: f64,
+    };
+    const parser = CliParser(struct {}, Params){ .context = ctx, .allocator = allocator };
+    const params = try parser.parse(&arguments);
+    try std.testing.expectEqual(3.14, params.arguments.arg_1);
 }
