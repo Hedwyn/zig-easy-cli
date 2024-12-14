@@ -20,7 +20,9 @@ pub const CliError = error{
     MaxTwoDashesAllowed,
     NotSupported,
     InvalidContainer,
-    UnknownArgument,
+    UnknownOption,
+    TooManyArguments,
+    TakesNoArgument,
 };
 
 // ShortFlag are passed with `-', LongFlag with '--',
@@ -30,20 +32,25 @@ const FlagType = enum {
     LongFlag,
 };
 
-pub fn CliParser(comptime T: type) type {
+pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
     return struct {
         context: CliContext,
         allocator: Allocator,
 
+        const Params = struct {
+            arguments: *ArgT,
+            options: *OptionT,
+        };
+
         const Self = @This();
 
-        pub fn parseArg(self: Self, arg_name: []const u8, arg_value: []const u8, flag_type: FlagType, container: *T) CliError!void {
+        pub fn parseArg(self: Self, comptime T: type, arg_name: []const u8, arg_value: []const u8, flag_type: FlagType, container: *T) CliError!void {
             const container_info = @typeInfo(T);
             _ = self;
             _ = flag_type;
             const struct_info = switch (container_info) {
                 .Struct => |s| s,
-                else => return .InvalidContainer,
+                else => return CliError.InvalidContainer,
             };
             inline for (struct_info.fields) |field| {
                 if (std.mem.eql(u8, field.name, arg_name)) {
@@ -51,28 +58,50 @@ pub fn CliParser(comptime T: type) type {
                     return;
                 }
             }
-            return CliError.UnknownArgument;
+            return CliError.UnknownOption;
         }
 
         pub fn introspectArgName(_: Self, arg_idx: usize) CliError![]const u8 {
-            _ = arg_idx;
-            return CliError.NotSupported;
+            const container_info = @typeInfo(ArgT);
+            const struct_info = switch (container_info) {
+                .Struct => |s| s,
+                else => return .InvalidContainer,
+            };
+            inline for (0.., struct_info.fields) |i, field| {
+                if (i == arg_idx) {
+                    return field.name;
+                }
+            }
+            return CliError.TooManyArguments;
         }
 
-        pub fn parse(self: Self, arg_it: anytype) CliError!*T {
-            const params: *T = self.allocator.create(T) catch return CliError.MemoryError;
+        pub fn parse(self: Self, arg_it: anytype) CliError!Params {
+            const options: *OptionT = self.allocator.create(OptionT) catch return CliError.MemoryError;
+            const arguments: *ArgT = self.allocator.create(ArgT) catch return CliError.MemoryError;
+            const params = Params{ .options = options, .arguments = arguments };
+
+            var is_option: bool = false;
             var ctx = self.context;
             var flag_type: ?FlagType = null;
             var current_arg_name: []const u8 = "";
             // If no explicit client name was passed,using process name
             const process_name: []const u8 = arg_it.next() orelse return CliError.EmptyArguments;
             ctx.name = ctx.name orelse process_name;
+            var next_arg = arg_it.next();
+            var consume = true;
 
-            while (arg_it.next()) |arg| {
+            while (next_arg) |arg| {
                 var arg_idx: usize = 0;
+                consume = true;
+                // consume will be set to false if we have an argument
+                defer next_arg = if (consume) arg_it.next() else next_arg;
 
                 if (flag_type) |flag| {
-                    try self.parseArg(current_arg_name, arg, flag, params);
+                    if (is_option) {
+                        try self.parseArg(OptionT, current_arg_name, arg, flag, options);
+                    } else {
+                        try self.parseArg(ArgT, current_arg_name, arg, flag, arguments);
+                    }
                     // consuming flag type
                     flag_type = null;
                     continue;
@@ -90,13 +119,18 @@ pub fn CliParser(comptime T: type) type {
                     };
                     arg_name_start_idx += 1;
                 }
-                current_arg_name = switch (flag_type.?) {
-                    .Argument => blk: {
+                switch (flag_type.?) {
+                    .Argument => {
+                        is_option = false;
+                        current_arg_name = try self.introspectArgName(arg_idx);
                         arg_idx += 1;
-                        break :blk try self.introspectArgName(arg_idx);
+                        consume = false;
                     },
-                    else => arg[arg_name_start_idx..],
-                };
+                    else => {
+                        is_option = true;
+                        current_arg_name = arg[arg_name_start_idx..];
+                    },
+                }
             }
             return params;
         }
@@ -112,7 +146,20 @@ test "parse with string parameters only" {
     const Params = struct {
         arg_1: ?[]const u8,
     };
-    const parser = CliParser(Params){ .context = ctx, .allocator = allocator };
+    const parser = CliParser(Params, struct {}){ .context = ctx, .allocator = allocator };
     const params = try parser.parse(&arguments);
-    try std.testing.expectEqualStrings("Argument1", params.arg_1.?);
+    try std.testing.expectEqualStrings("Argument1", params.options.arg_1.?);
+}
+
+test "parse with arguments" {
+    const prompt = "testcli Argument1";
+    var arguments = std.mem.split(u8, prompt, " ");
+    const allocator = std.heap.page_allocator;
+    const ctx = CliContext{};
+    const Params = struct {
+        arg_1: ?[]const u8 = null,
+    };
+    const parser = CliParser(struct {}, Params){ .context = ctx, .allocator = allocator };
+    const params = try parser.parse(&arguments);
+    try std.testing.expectEqualStrings("Argument1", params.arguments.arg_1.?);
 }
