@@ -23,6 +23,7 @@ pub const CliError = error{
     UnknownOption,
     TooManyArguments,
     TakesNoArgument,
+    IncorrectArgumentType,
 };
 
 // ShortFlag are passed with `-', LongFlag with '--',
@@ -40,6 +41,21 @@ fn initOptionals(comptime T: type, container: *T) void {
             else => continue,
         }
     }
+}
+
+fn autoCast(comptime T: type, value_str: []const u8) CliError!T {
+    if (T == []const u8 or T == ?[]const u8) {
+        return value_str;
+    }
+    return switch (@typeInfo(T)) {
+        .Int => std.fmt.parseInt(T, value_str, 10) catch {
+            return CliError.IncorrectArgumentType;
+        },
+        .Float => std.fmt.parseFloat(T, value_str) catch {
+            return CliError.IncorrectArgumentType;
+        },
+        else => unreachable,
+    };
 }
 
 pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
@@ -64,7 +80,7 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             };
             inline for (struct_info.fields) |field| {
                 if (std.mem.eql(u8, field.name, arg_name)) {
-                    @field(container, field.name) = arg_value;
+                    @field(container, field.name) = try autoCast(field.type, arg_value);
                     return;
                 }
             }
@@ -174,4 +190,17 @@ test "parse with arguments" {
     const parser = CliParser(struct {}, Params){ .context = ctx, .allocator = allocator };
     const params = try parser.parse(&arguments);
     try std.testing.expectEqualStrings("Argument1", params.arguments.arg_1.?);
+}
+
+test "parse integer argument" {
+    const prompt = "testcli 42";
+    var arguments = std.mem.split(u8, prompt, " ");
+    const allocator = std.heap.page_allocator;
+    const ctx = CliContext{};
+    const Params = struct {
+        arg_1: i32,
+    };
+    const parser = CliParser(struct {}, Params){ .context = ctx, .allocator = allocator };
+    const params = try parser.parse(&arguments);
+    try std.testing.expectEqual(42, params.arguments.arg_1);
 }
