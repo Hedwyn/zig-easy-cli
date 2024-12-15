@@ -21,6 +21,7 @@ pub const CliError = error{
     NotSupported,
     InvalidContainer,
     UnknownOption,
+    UnknownArgument,
     TooManyArguments,
     TakesNoArgument,
     IncorrectArgumentType,
@@ -55,6 +56,7 @@ fn autoCast(comptime T: type, value_str: []const u8) CliError!T {
             return CliError.IncorrectArgumentType;
         },
         .Optional => |option| try autoCast(option.child, value_str),
+        .Bool => |_| true,
         else => unreachable,
     };
 }
@@ -70,6 +72,24 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
         };
 
         const Self = @This();
+
+        fn isFlag(arg_name: []const u8) CliError!bool {
+            inline for ([_]type{ OptionT, ArgT }) |container_type| {
+                const type_st = switch (@typeInfo(container_type)) {
+                    .Struct => |s| s,
+                    else => unreachable,
+                };
+                inline for (type_st.fields) |field| {
+                    if (std.mem.eql(u8, field.name, arg_name)) {
+                        return switch (@typeInfo(field.type)) {
+                            .Bool => true,
+                            else => false,
+                        };
+                    }
+                }
+            }
+            return CliError.UnknownArgument;
+        }
 
         pub fn parseArg(self: Self, comptime T: type, arg_name: []const u8, arg_value: []const u8, flag_type: FlagType, container: *T) CliError!void {
             const container_info = @typeInfo(T);
@@ -95,10 +115,7 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                 else => return .InvalidContainer,
             };
             inline for (0.., struct_info.fields) |i, field| {
-                std.debug.print("Finding arg for {} {}\n", .{ i, arg_idx });
                 if (i == arg_idx) {
-                    std.debug.print("Found {s} \n", .{field.name});
-
                     return field.name;
                 }
             }
@@ -125,11 +142,11 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             var consume = true;
 
             while (next_arg) |arg| {
-                consume = true;
                 // consume will be set to false if we have an argument
                 defer next_arg = if (consume) arg_it.next() else next_arg;
 
                 if (flag_type) |flag| {
+                    consume = true;
                     defer flag_type = null;
                     if (is_option) {
                         try self.parseArg(OptionT, current_arg_name, arg, flag, options);
@@ -162,6 +179,9 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                     else => {
                         is_option = true;
                         current_arg_name = arg[arg_name_start_idx..];
+                        if (try isFlag(current_arg_name)) {
+                            try self.parseArg(OptionT, current_arg_name, arg, flag_type.?, options);
+                        }
                     },
                 }
             }
@@ -198,7 +218,6 @@ test "parse single argument" {
 }
 
 test "parse many arguments" {
-    std.debug.print("Many arguments\n\n", .{});
     const prompt = "testcli Argument1 Argument2";
     var arguments = std.mem.split(u8, prompt, " ");
     const allocator = std.heap.page_allocator;
@@ -236,4 +255,17 @@ test "parse float argument" {
     const parser = CliParser(struct {}, Params){ .context = ctx, .allocator = allocator };
     const params = try parser.parse(&arguments);
     try std.testing.expectEqual(3.14, params.arguments.arg_1);
+}
+
+test "parse boolean flag" {
+    const prompt = "testcli --enable";
+    var arguments = std.mem.split(u8, prompt, " ");
+    const allocator = std.heap.page_allocator;
+    const ctx = CliContext{};
+    const Options = struct {
+        enable: bool,
+    };
+    const parser = CliParser(Options, struct {}){ .context = ctx, .allocator = allocator };
+    const params = try parser.parse(&arguments);
+    try std.testing.expect(params.options.enable);
 }
