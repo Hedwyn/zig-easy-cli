@@ -26,6 +26,7 @@ pub const CliError = error{
     TakesNoArgument,
     IncorrectArgumentType,
     InvalidChoice,
+    InvalidBooleanValue,
 };
 
 // ShortFlag are passed with `-', LongFlag with '--',
@@ -61,7 +62,15 @@ fn autoCast(comptime T: type, value_str: []const u8) CliError!T {
         },
         .Optional => |option| try autoCast(option.child, value_str),
         // note: for bool, having the flag in the first place means true
-        .Bool => |_| true,
+        .Bool => |_| {
+            if (std.mem.eql(u8, "true", value_str)) {
+                return true;
+            }
+            if (std.mem.eql(u8, "false", value_str)) {
+                return false;
+            }
+            return CliError.InvalidBooleanValue;
+        },
         .Enum => |choices| {
             inline for (choices.fields) |field| {
                 if (std.mem.eql(u8, field.name, value_str)) {
@@ -113,10 +122,8 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             return ArgT != NoArguments;
         }
 
-        pub fn parseArg(self: Self, comptime T: type, arg_name: []const u8, arg_value: []const u8, flag_type: FlagType, container: *T) CliError!void {
+        pub fn setArgFromString(comptime T: type, arg_name: []const u8, arg_value: []const u8, container: *T) CliError!void {
             const container_info = @typeInfo(T);
-            _ = self;
-            _ = flag_type;
             const struct_info = switch (container_info) {
                 .Struct => |s| s,
                 else => return CliError.InvalidContainer,
@@ -128,6 +135,51 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                 }
             }
             return CliError.UnknownOption;
+        }
+
+        pub fn parseFlag(arg_name: []const u8, params: Params) CliError!void {
+            setArgFromString(
+                BuiltinOptions,
+                arg_name,
+                "true",
+                params.builtin,
+            ) catch {
+                try setArgFromString(
+                    OptionT,
+                    arg_name,
+                    "true",
+                    params.options,
+                );
+            };
+        }
+
+        pub fn parseArg(
+            arg_name: []const u8,
+            arg_value: []const u8,
+            is_option: bool,
+            params: Params,
+        ) CliError!void {
+            if (is_option) {
+                return setArgFromString(
+                    BuiltinOptions,
+                    arg_name,
+                    arg_value,
+                    params.builtin,
+                ) catch {
+                    try setArgFromString(
+                        OptionT,
+                        arg_name,
+                        arg_value,
+                        params.options,
+                    );
+                };
+            }
+            try setArgFromString(
+                ArgT,
+                arg_name,
+                arg_value,
+                params.arguments,
+            );
         }
 
         pub fn introspectArgName(_: Self, arg_idx: usize) CliError![]const u8 {
@@ -173,34 +225,16 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                 // consume will be set to false if we have an argument
                 defer next_arg = if (consume) arg_it.next() else next_arg;
 
-                if (flag_type) |flag| {
+                if (flag_type) |_| {
                     consume = true;
                     defer flag_type = null;
-                    if (is_option) {
-                        self.parseArg(
-                            BuiltinOptions,
-                            current_arg_name,
-                            arg,
-                            flag,
-                            builtin_options,
-                        ) catch {
-                            try self.parseArg(
-                                OptionT,
-                                current_arg_name,
-                                arg,
-                                flag,
-                                options,
-                            );
-                        };
-                    } else {
-                        try self.parseArg(
-                            ArgT,
-                            current_arg_name,
-                            arg,
-                            flag,
-                            arguments,
-                        );
-                    }
+                    try parseArg(
+                        current_arg_name,
+                        arg,
+                        is_option,
+                        params,
+                    );
+
                     // _ = blk: {
                     //     if (is_option) {
                     //         break :blk self.parseArg(OptionT, current_arg_name, arg, flag, options);
@@ -238,21 +272,7 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                         is_option = true;
                         current_arg_name = arg[arg_name_start_idx..];
                         if (try isFlag(current_arg_name)) {
-                            self.parseArg(
-                                BuiltinOptions,
-                                current_arg_name,
-                                arg,
-                                flag_type.?,
-                                builtin_options,
-                            ) catch {
-                                try self.parseArg(
-                                    OptionT,
-                                    current_arg_name,
-                                    arg,
-                                    flag_type.?,
-                                    options,
-                                );
-                            };
+                            try parseFlag(current_arg_name, params);
                         }
                     },
                 }
