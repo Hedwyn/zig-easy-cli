@@ -9,15 +9,14 @@ pub fn main() !void {
     const allocator = std.heap.page_allocator;
     var args_it = std.process.args();
 
-    const builtin_params = try easycli.preprocess(allocator, &args_it);
-    if (builtin_params.options.help) {
-        std.debug.print("Pass your name as argument and optionally your surname with --surname !\n", .{});
-        return;
-    }
-    args_it = std.process.args();
     const ctx = easycli.CliContext{};
     const parser = easycli.CliParser(DemoOptions, DemoArgs){ .context = ctx, .allocator = allocator };
     const params = try parser.parse(&args_it);
+
+    if (params.builtin.help) {
+        std.debug.print("Pass your name as argument and optionally your surname with --surname !\n", .{});
+        return;
+    }
 
     const name = if (params.arguments.name) |n| n else {
         std.debug.print("You need to pass your name !\n", .{});

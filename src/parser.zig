@@ -78,6 +78,7 @@ pub fn CliParams(comptime OptionT: type, comptime ArgT: type) type {
     return struct {
         arguments: *ArgT,
         options: *OptionT,
+        builtin: *BuiltinOptions,
     };
 }
 
@@ -91,7 +92,7 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
         const Self = @This();
 
         fn isFlag(arg_name: []const u8) CliError!bool {
-            inline for ([_]type{ OptionT, ArgT }) |container_type| {
+            inline for ([_]type{ OptionT, ArgT, BuiltinOptions }) |container_type| {
                 const type_st = switch (@typeInfo(container_type)) {
                     .Struct => |s| s,
                     else => unreachable,
@@ -143,12 +144,18 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             return CliError.TooManyArguments;
         }
 
-        pub fn parse_with_options(self: Self, arg_it: anytype, ignore_unknown: bool) CliError!Params {
+        pub fn parse(self: Self, arg_it: anytype) CliError!Params {
             const options: *OptionT = self.allocator.create(OptionT) catch return CliError.MemoryError;
             const arguments: *ArgT = self.allocator.create(ArgT) catch return CliError.MemoryError;
+            const builtin_options = self.allocator.create(BuiltinOptions) catch return CliError.MemoryError;
             initOptionals(OptionT, options);
             initOptionals(ArgT, arguments);
-            const params = Params{ .options = options, .arguments = arguments };
+
+            const params = Params{
+                .options = options,
+                .arguments = arguments,
+                .builtin = builtin_options,
+            };
 
             var is_option: bool = false;
             var ctx = self.context;
@@ -169,15 +176,40 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                 if (flag_type) |flag| {
                     consume = true;
                     defer flag_type = null;
-                    _ = blk: {
-                        if (is_option) {
-                            break :blk self.parseArg(OptionT, current_arg_name, arg, flag, options);
-                        }
-                        break :blk self.parseArg(ArgT, current_arg_name, arg, flag, arguments);
-                    } catch |e| {
-                        if (!ignore_unknown) return e;
-                        // else ignoring
-                    };
+                    if (is_option) {
+                        self.parseArg(
+                            BuiltinOptions,
+                            current_arg_name,
+                            arg,
+                            flag,
+                            builtin_options,
+                        ) catch {
+                            try self.parseArg(
+                                OptionT,
+                                current_arg_name,
+                                arg,
+                                flag,
+                                options,
+                            );
+                        };
+                    } else {
+                        try self.parseArg(
+                            ArgT,
+                            current_arg_name,
+                            arg,
+                            flag,
+                            arguments,
+                        );
+                    }
+                    // _ = blk: {
+                    //     if (is_option) {
+                    //         break :blk self.parseArg(OptionT, current_arg_name, arg, flag, options);
+                    //     }
+                    //     break :blk self.parseArg(ArgT, current_arg_name, arg, flag, arguments);
+                    // } catch |e| {
+                    //     if (!ignore_unknown) return e;
+                    //     // else ignoring
+                    // };
                     // consuming flag type
                     continue;
                 }
@@ -206,16 +238,26 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                         is_option = true;
                         current_arg_name = arg[arg_name_start_idx..];
                         if (try isFlag(current_arg_name)) {
-                            try self.parseArg(OptionT, current_arg_name, arg, flag_type.?, options);
+                            self.parseArg(
+                                BuiltinOptions,
+                                current_arg_name,
+                                arg,
+                                flag_type.?,
+                                builtin_options,
+                            ) catch {
+                                try self.parseArg(
+                                    OptionT,
+                                    current_arg_name,
+                                    arg,
+                                    flag_type.?,
+                                    options,
+                                );
+                            };
                         }
                     },
                 }
             }
             return params;
-        }
-
-        pub fn parse(self: Self, arg_it: anytype) CliError!Params {
-            return self.parse_with_options(arg_it, true);
         }
     };
 }
@@ -224,12 +266,6 @@ pub const BuiltinOptions = struct {
     help: bool,
 };
 pub const BuiltinParser = CliParser(BuiltinOptions, NoArguments);
-
-pub fn preprocess(allocator: Allocator, arg_it: anytype) CliError!BuiltinParser.Params {
-    // Running built-in arguments first
-    const builtin_parser = BuiltinParser{ .context = .{}, .allocator = allocator };
-    return try builtin_parser.parse_with_options(arg_it, true);
-}
 
 // Basic test case that only uses options and does not require casting
 test "parse with string parameters only" {
@@ -344,16 +380,25 @@ test "parse choices invalid case" {
     const Options = struct {
         choice: Choices,
     };
-    const parser = CliParser(Options, struct {}){ .context = ctx, .allocator = allocator };
+    const parser = CliParser(Options, struct {}){
+        .context = ctx,
+        .allocator = allocator,
+    };
     const prompt = "testcli --choice invalid";
     var arguments = std.mem.split(u8, prompt, " ");
     try std.testing.expectEqual(parser.parse(&arguments), CliError.InvalidChoice);
 }
 
-test "preprocess" {
+test "parse help" {
     const allocator = std.heap.page_allocator;
     const prompt = "testcli --help";
+    const ctx = CliContext{};
+
     var arguments = std.mem.split(u8, prompt, " ");
-    const params = try preprocess(allocator, &arguments);
-    try std.testing.expect(params.options.help);
+    const parser = CliParser(struct {}, struct {}){
+        .context = ctx,
+        .allocator = allocator,
+    };
+    const params = try parser.parse(&arguments);
+    try std.testing.expect(params.builtin.help);
 }
