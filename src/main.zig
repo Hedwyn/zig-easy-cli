@@ -1,6 +1,6 @@
 /// Small demo code
 const std = @import("std");
-const easycli = @import("root.zig");
+const easycli = @import("parser.zig");
 
 const DemoOptions = struct { surname: ?[]const u8 };
 const DemoArgs = struct { name: ?[]const u8 };
