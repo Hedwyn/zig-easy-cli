@@ -25,6 +25,7 @@ pub const CliError = error{
     TooManyArguments,
     TakesNoArgument,
     IncorrectArgumentType,
+    InvalidChoice,
 };
 
 // ShortFlag are passed with `-', LongFlag with '--',
@@ -56,7 +57,16 @@ fn autoCast(comptime T: type, value_str: []const u8) CliError!T {
             return CliError.IncorrectArgumentType;
         },
         .Optional => |option| try autoCast(option.child, value_str),
+        // note: for bool, having the flag in the first place means true
         .Bool => |_| true,
+        .Enum => |choices| {
+            inline for (choices.fields) |field| {
+                if (std.mem.eql(u8, field.name, value_str)) {
+                    return @enumFromInt(field.value);
+                }
+            }
+            return CliError.InvalidChoice;
+        },
         else => unreachable,
     };
 }
@@ -268,4 +278,43 @@ test "parse boolean flag" {
     const parser = CliParser(Options, struct {}){ .context = ctx, .allocator = allocator };
     const params = try parser.parse(&arguments);
     try std.testing.expect(params.options.enable);
+}
+
+test "parse choices valid case" {
+    const allocator = std.heap.page_allocator;
+    const ctx = CliContext{};
+    const Choices = enum { choice_a, choice_b, choice_c };
+    const Options = struct {
+        choice: Choices,
+    };
+    const parser = CliParser(Options, struct {}){ .context = ctx, .allocator = allocator };
+
+    const test_cases: [3][]const u8 = .{
+        "testcli --choice choice_a",
+        "testcli --choice choice_b",
+        "testcli --choice choice_c",
+    };
+    const expected = [_]Choices{
+        Choices.choice_a,
+        Choices.choice_b,
+        Choices.choice_c,
+    };
+    for (0.., test_cases) |i, prompt| {
+        var arguments = std.mem.split(u8, prompt, " ");
+        const params = try parser.parse(&arguments);
+        try std.testing.expectEqual(expected[i], params.options.choice);
+    }
+}
+
+test "parse choices invalid case" {
+    const allocator = std.heap.page_allocator;
+    const ctx = CliContext{};
+    const Choices = enum { choice_a, choice_b, choice_c };
+    const Options = struct {
+        choice: Choices,
+    };
+    const parser = CliParser(Options, struct {}){ .context = ctx, .allocator = allocator };
+    const prompt = "testcli --choice invalid";
+    var arguments = std.mem.split(u8, prompt, " ");
+    try std.testing.expectEqual(parser.parse(&arguments), CliError.InvalidChoice);
 }
