@@ -8,13 +8,15 @@ const DemoArgs = struct { name: ?[]const u8 };
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
     var args_it = std.process.args();
-
+    const writer = std.io.getStdOut().writer();
     const ctx = easycli.CliContext{};
-    const parser = easycli.CliParser(DemoOptions, DemoArgs){ .context = ctx, .allocator = allocator };
+    const ParserT = easycli.CliParser(DemoOptions, DemoArgs);
+    const parser = ParserT{ .context = ctx, .allocator = allocator };
     const params = try parser.parse(&args_it);
 
     if (params.builtin.help) {
-        std.debug.print("Pass your name as argument and optionally your surname with --surname !\n", .{});
+        // _ = try writer.write("Pass your name as argument and optionally your surname with --surname !\n");
+        try ParserT.emitHelp(writer);
         return;
     }
 
