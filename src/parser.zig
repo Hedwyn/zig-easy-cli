@@ -342,10 +342,10 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                 );
                 _ = try writer.write("\n");
                 inline for (std.meta.fields(ArgT)) |field| {
-                    _ = try writer.write(field.name);
-                    _ = try writer.write(": ");
-                    _ = try writer.write(getTypeName(field.type));
-                    _ = try writer.write("\n");
+                    try writer.print("{s}: {s}\n", .{
+                        field.name,
+                        getTypeName(field.type),
+                    });
                 }
             }
             _ = try writer.write("\n");
@@ -356,14 +356,11 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                 );
                 _ = try writer.write("\n");
                 inline for (std.meta.fields(OptionT)) |field| {
-                    _ = try writer.write("-");
-                    _ = try writer.write(flag_map.get(field.name).?);
-                    _ = try writer.write(", ");
-                    _ = try writer.write("--");
-                    _ = try writer.write(field.name);
-                    _ = try writer.write(": ");
-                    _ = try writer.write(getTypeName(field.type));
-                    _ = try writer.write("\n");
+                    try writer.print("{s}, {s}: {s}\n", .{
+                        flag_map.get(field.name).?,
+                        field.name,
+                        getTypeName(field.type),
+                    });
                 }
             }
         }
