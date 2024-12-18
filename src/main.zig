@@ -2,7 +2,7 @@
 const std = @import("std");
 const easycli = @import("parser.zig");
 
-const DemoOptions = struct { surname: ?[]const u8 };
+const DemoOptions = struct { surname: ?[]const u8, grade: enum { Employee, Boss } };
 const DemoArgs = struct { name: ?[]const u8 };
 
 pub fn main() !void {
@@ -16,7 +16,7 @@ pub fn main() !void {
 
     if (params.builtin.help) {
         // _ = try writer.write("Pass your name as argument and optionally your surname with --surname !\n");
-        try ParserT.emitHelp(writer);
+        try parser.emitHelp(writer);
         return;
     }
 

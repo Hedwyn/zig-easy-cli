@@ -129,6 +129,16 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
 
         const Self = @This();
 
+        const OptionSt = switch (@typeInfo(OptionT)) {
+            .Struct => |st| st,
+            else => unreachable,
+        };
+
+        const ArgSt = switch (@typeInfo(OptionT)) {
+            .Struct => |st| st,
+            else => unreachable,
+        };
+
         fn isFlag(arg_name: []const u8) CliError!bool {
             inline for ([_]type{ OptionT, ArgT, BuiltinOptions }) |container_type| {
                 const type_st = switch (@typeInfo(container_type)) {
@@ -145,6 +155,23 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                 }
             }
             return CliError.UnknownArgument;
+        }
+
+        pub fn buildShortFlagMap(self: Self, reverse: bool) std.StringHashMap([]const u8) {
+            var map = std.StringHashMap([]const u8).init(self.allocator);
+            var reversed_map = std.StringHashMap([]const u8).init(self.allocator);
+
+            inline for (OptionSt.fields) |field| {
+                var slice_index: usize = 1;
+                var slice = field.name[0..slice_index];
+                while (reversed_map.contains(slice)) {
+                    slice_index += 1;
+                    slice = field.name[0..slice_index];
+                }
+                reversed_map.put(slice, field.name) catch unreachable;
+                map.put(field.name, slice) catch unreachable;
+            }
+            return if (reverse) reversed_map else map;
         }
 
         pub fn hasArguments() bool {
@@ -232,6 +259,8 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             const options: *OptionT = self.allocator.create(OptionT) catch return CliError.MemoryError;
             const arguments: *ArgT = self.allocator.create(ArgT) catch return CliError.MemoryError;
             const builtin_options = self.allocator.create(BuiltinOptions) catch return CliError.MemoryError;
+
+            const short_flags = self.buildShortFlagMap(true);
             initOptionals(OptionT, options);
             initOptionals(ArgT, arguments);
 
@@ -290,6 +319,13 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                         arg_idx += 1;
                         consume = false;
                     },
+                    .ShortFlag => {
+                        is_option = true;
+                        current_arg_name = short_flags.get(arg[arg_name_start_idx..]) orelse return CliError.UnknownOption;
+                        if (try isFlag(current_arg_name)) {
+                            try parseFlag(current_arg_name, params);
+                        }
+                    },
                     else => {
                         is_option = true;
                         current_arg_name = arg[arg_name_start_idx..];
@@ -302,7 +338,8 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             return params;
         }
 
-        pub fn emitHelp(writer: Writer) !void {
+        pub fn emitHelp(self: Self, writer: Writer) !void {
+            const flag_map = self.buildShortFlagMap(false);
             _ = try writer.write("===== Usage =====\n\n");
             if (hasArguments()) {
                 _ = try writer.write(
@@ -325,6 +362,9 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                 );
                 _ = try writer.write("\n");
                 inline for (std.meta.fields(OptionT)) |field| {
+                    _ = try writer.write("-");
+                    _ = try writer.write(flag_map.get(field.name).?);
+                    _ = try writer.write(", ");
                     _ = try writer.write("--");
                     _ = try writer.write(field.name);
                     _ = try writer.write(": ");
@@ -480,4 +520,25 @@ test "parse help" {
 test "get type name on enum" {
     const TestEnum = enum { ChoiceA, ChoiceB, ChoiceC };
     try std.testing.expectEqualStrings("ChoiceA|ChoiceB|ChoiceC", getTypeName(TestEnum));
+}
+
+test "build short flag map" {
+    const allocator = std.heap.page_allocator;
+    const ctx = CliContext{};
+
+    const TestOptions = struct {
+        abcde: bool, // expects -a
+        abd: bool, // expects -ab
+        abcfg: bool, // expects -abc
+        cba: bool, // expects -c
+    };
+    const parser = CliParser(TestOptions, NoOptions){
+        .context = ctx,
+        .allocator = allocator,
+    };
+    const short_flag_map = parser.buildShortFlagMap(false);
+    try std.testing.expectEqualStrings("a", short_flag_map.get("abcde").?);
+    try std.testing.expectEqualStrings("ab", short_flag_map.get("abd").?);
+    try std.testing.expectEqualStrings("abc", short_flag_map.get("abcfg").?);
+    try std.testing.expectEqualStrings("c", short_flag_map.get("cba").?);
 }
