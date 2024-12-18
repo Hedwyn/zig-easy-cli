@@ -10,6 +10,8 @@ const Allocator = std.mem.Allocator;
 // const ArgIterator = std.process.ArgIterator;
 const ArgIterator = anyopaque;
 
+const default_welcome_message = "Welcome to {s} !\n";
+
 pub const CliContext = struct {
     name: ?[]const u8 = null,
     welcome_msg: ?[]const u8 = null,
@@ -56,7 +58,7 @@ pub fn getTypeName(comptime T: type) []const u8 {
         return "text";
     }
     const type_description = comptime switch (@typeInfo(T)) {
-        .Bool => "boolean",
+        .Bool => "flag",
         .Int => "integer",
         .Float => "float",
         .Enum => |choices| formatChoices(choices.fields),
@@ -301,13 +303,14 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
         }
 
         pub fn emitHelp(writer: Writer) !void {
+            _ = try writer.write("===== Usage =====\n\n");
             if (hasArguments()) {
                 _ = try writer.write(
                     \\Arguments
                     \\---------
                 );
                 _ = try writer.write("\n");
-                inline for (std.meta.fields(OptionT)) |field| {
+                inline for (std.meta.fields(ArgT)) |field| {
                     _ = try writer.write(field.name);
                     _ = try writer.write(": ");
                     _ = try writer.write(getTypeName(field.type));
@@ -321,7 +324,8 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                     \\-------
                 );
                 _ = try writer.write("\n");
-                inline for (std.meta.fields(ArgT)) |field| {
+                inline for (std.meta.fields(OptionT)) |field| {
+                    _ = try writer.write("--");
                     _ = try writer.write(field.name);
                     _ = try writer.write(": ");
                     _ = try writer.write(getTypeName(field.type));
