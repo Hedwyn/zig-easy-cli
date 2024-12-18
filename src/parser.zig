@@ -260,7 +260,8 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             const arguments: *ArgT = self.allocator.create(ArgT) catch return CliError.MemoryError;
             const builtin_options = self.allocator.create(BuiltinOptions) catch return CliError.MemoryError;
 
-            const short_flags = self.buildShortFlagMap(true);
+            var short_flags = self.buildShortFlagMap(true);
+            defer short_flags.deinit();
             initOptionals(OptionT, options);
             initOptionals(ArgT, arguments);
 
@@ -339,7 +340,8 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
         }
 
         pub fn emitHelp(self: Self, writer: Writer) !void {
-            const flag_map = self.buildShortFlagMap(false);
+            var flag_map = self.buildShortFlagMap(false);
+            defer flag_map.deinit();
             _ = try writer.write("===== Usage =====\n\n");
             if (hasArguments()) {
                 _ = try writer.write(
