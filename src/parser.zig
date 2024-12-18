@@ -4,11 +4,12 @@ const testing = std.testing;
 const File = std.fs.File;
 const Writer = File.Writer;
 const Type = std.builtin.Type;
-
+const Struct = Type.Struct;
 // types
 const Allocator = std.mem.Allocator;
 // const ArgIterator = std.process.ArgIterator;
 const ArgIterator = anyopaque;
+const panic = std.debug.panic;
 
 const default_welcome_message = "Welcome to {s} !\n";
 
@@ -120,6 +121,14 @@ pub fn CliParams(comptime OptionT: type, comptime ArgT: type) type {
     };
 }
 
+///! Asserts that type is a struct and returns its Struct variant.
+pub fn ensureStruct(comptime T: type) Struct {
+    switch (@typeInfo(T)) {
+        .Struct => |s| return s,
+        else => std.debug.panic("Type {} should be a struct", .{T}),
+    }
+}
+
 pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
     return struct {
         context: CliContext,
@@ -129,22 +138,14 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
 
         const Self = @This();
 
-        const OptionSt = switch (@typeInfo(OptionT)) {
-            .Struct => |st| st,
-            else => unreachable,
-        };
-
-        const ArgSt = switch (@typeInfo(OptionT)) {
-            .Struct => |st| st,
-            else => unreachable,
-        };
+        // Making sure that the types are structs and extracting
+        // their meta struct
+        const OptionSt = ensureStruct(OptionT);
+        const ArgSt = ensureStruct(ArgT);
+        const BuiltinSt = ensureStruct(BuiltinOptions);
 
         fn isFlag(arg_name: []const u8) CliError!bool {
-            inline for ([_]type{ OptionT, ArgT, BuiltinOptions }) |container_type| {
-                const type_st = switch (@typeInfo(container_type)) {
-                    .Struct => |s| s,
-                    else => unreachable,
-                };
+            inline for ([_]Struct{ OptionSt, ArgSt, BuiltinSt }) |type_st| {
                 inline for (type_st.fields) |field| {
                     if (std.mem.eql(u8, field.name, arg_name)) {
                         return switch (@typeInfo(field.type)) {
@@ -182,11 +183,7 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             return OptionT != NoOptions;
         }
         pub fn setArgFromString(comptime T: type, arg_name: []const u8, arg_value: []const u8, container: *T) CliError!void {
-            const container_info = @typeInfo(T);
-            const struct_info = switch (container_info) {
-                .Struct => |s| s,
-                else => return CliError.InvalidContainer,
-            };
+            const struct_info = ensureStruct(T);
             inline for (struct_info.fields) |field| {
                 if (std.mem.eql(u8, field.name, arg_name)) {
                     @field(container, field.name) = try autoCast(field.type, arg_value);
@@ -242,12 +239,7 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
         }
 
         pub fn introspectArgName(_: Self, arg_idx: usize) CliError![]const u8 {
-            const container_info = @typeInfo(ArgT);
-            const struct_info = switch (container_info) {
-                .Struct => |s| s,
-                else => return .InvalidContainer,
-            };
-            inline for (0.., struct_info.fields) |i, field| {
+            inline for (0.., ArgSt.fields) |i, field| {
                 if (i == arg_idx) {
                     return field.name;
                 }
