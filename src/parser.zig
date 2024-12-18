@@ -4,6 +4,7 @@ const testing = std.testing;
 const File = std.fs.File;
 const Writer = File.Writer;
 const Type = std.builtin.Type;
+
 // types
 const Allocator = std.mem.Allocator;
 // const ArgIterator = std.process.ArgIterator;
@@ -11,6 +12,7 @@ const ArgIterator = anyopaque;
 
 pub const CliContext = struct {
     name: ?[]const u8 = null,
+    welcome_msg: ?[]const u8 = null,
 };
 
 pub const CliError = error{
@@ -41,17 +43,27 @@ const FlagType = enum {
 pub const NoArguments = struct {};
 pub const NoOptions = struct {};
 
+pub fn formatChoices(fields: []const Type.EnumField) []const u8 {
+    var choices: []const u8 = "";
+    inline for (fields) |field| {
+        choices = if (choices.len == 0) field.name else choices ++ "|" ++ field.name;
+    }
+    return choices;
+}
+
 pub fn getTypeName(comptime T: type) []const u8 {
     if (T == []const u8) {
-        return "string";
+        return "text";
     }
-    return switch (@typeInfo(T)) {
+    const type_description = comptime switch (@typeInfo(T)) {
         .Bool => "boolean",
         .Int => "integer",
         .Float => "float",
-        .Optional => |opt| getTypeName(opt.child),
+        .Enum => |choices| formatChoices(choices.fields),
+        .Optional => |opt| "(Optional) " ++ getTypeName(opt.child),
         else => unreachable,
     };
+    return type_description;
 }
 
 /// Init all optional fields to null in a struct
@@ -459,4 +471,9 @@ test "parse help" {
     };
     const params = try parser.parse(&arguments);
     try std.testing.expect(params.builtin.help);
+}
+
+test "get type name on enum" {
+    const TestEnum = enum { ChoiceA, ChoiceB, ChoiceC };
+    try std.testing.expectEqualStrings("ChoiceA|ChoiceB|ChoiceC", getTypeName(TestEnum));
 }
