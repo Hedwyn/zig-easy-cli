@@ -7,7 +7,7 @@ const DemoArgs = struct { name: ?[]const u8 };
 
 pub fn main() !void {
     const ParserT = easycli.CliParser(DemoOptions, DemoArgs);
-    const params = if (try ParserT.run_standalone()) |p| p else return;
+    const params = if (try ParserT.runStandalone()) |p| p else return;
     const name = if (params.arguments.name) |n| n else {
         std.debug.print("You need to pass your name !\n", .{});
         return;

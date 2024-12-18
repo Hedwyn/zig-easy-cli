@@ -15,7 +15,7 @@ const default_welcome_message = "Welcome to {s} !\n";
 
 pub const CliContext = struct {
     name: ?[]const u8 = null,
-    welcome_msg: ?[]const u8 = null,
+    comptime welcome_msg: ?[]const u8 = null,
 };
 
 pub const CliError = error{
@@ -247,7 +247,7 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             return CliError.TooManyArguments;
         }
 
-        pub fn parse(self: Self, arg_it: anytype) CliError!Params {
+        pub fn parse(self: *Self, arg_it: anytype) CliError!Params {
             const options: *OptionT = self.allocator.create(OptionT) catch return CliError.MemoryError;
             const arguments: *ArgT = self.allocator.create(ArgT) catch return CliError.MemoryError;
             const builtin_options = self.allocator.create(BuiltinOptions) catch return CliError.MemoryError;
@@ -264,14 +264,13 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             };
 
             var is_option: bool = false;
-            var ctx = self.context;
             var flag_type: ?FlagType = null;
             var current_arg_name: []const u8 = "";
             var arg_idx: usize = 0;
 
             // If no explicit client name was passed,using process name
             const process_name: []const u8 = arg_it.next() orelse return CliError.EmptyArguments;
-            ctx.name = ctx.name orelse process_name;
+            self.context.name = self.context.name orelse process_name;
             var next_arg = arg_it.next();
             var consume = true;
 
@@ -331,6 +330,17 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             return params;
         }
 
+        pub fn emitWelcomeMessage(self: Self, writer: Writer) !void {
+            if (self.context.name) |name| {
+                const welcome_msg = self.context.welcome_msg orelse default_welcome_message;
+                return try writer.print(welcome_msg, .{name});
+            }
+            @panic(
+                \\No client name given and the parser has not run,
+                \\ cannot format welcome message.
+            );
+        }
+
         pub fn emitHelp(self: Self, writer: Writer) !void {
             var flag_map = self.buildShortFlagMap(false);
             defer flag_map.deinit();
@@ -356,7 +366,7 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                 );
                 _ = try writer.write("\n");
                 inline for (std.meta.fields(OptionT)) |field| {
-                    try writer.print("{s}, {s}: {s}\n", .{
+                    try writer.print("-{s}, --{s}: {s}\n", .{
                         flag_map.get(field.name).?,
                         field.name,
                         getTypeName(field.type),
@@ -365,14 +375,14 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             }
         }
 
-        pub fn run_standalone() !?Params {
+        pub fn runStandalone() !?Params {
             const allocator = std.heap.page_allocator;
             var args_it = std.process.args();
             const writer = std.io.getStdOut().writer();
-            const ctx = CliContext{};
-            const parser = Self{ .context = ctx, .allocator = allocator };
+            var parser = Self{ .context = .{}, .allocator = allocator };
             const params = try parser.parse(&args_it);
-
+            std.debug.assert(parser.context.name != null);
+            try parser.emitWelcomeMessage(writer);
             if (params.builtin.help) {
                 // _ = try writer.write("Pass your name as argument and optionally your surname with --surname !\n");
                 try parser.emitHelp(writer);
@@ -397,7 +407,7 @@ test "parse with string parameters only" {
     const Params = struct {
         arg_1: ?[]const u8,
     };
-    const parser = CliParser(Params, NoArguments){ .context = ctx, .allocator = allocator };
+    var parser = CliParser(Params, NoArguments){ .context = ctx, .allocator = allocator };
     const params = try parser.parse(&arguments);
     try std.testing.expectEqualStrings("Argument1", params.options.arg_1.?);
 }
@@ -410,7 +420,7 @@ test "parse single argument" {
     const Params = struct {
         arg_1: ?[]const u8 = null,
     };
-    const parser = CliParser(NoOptions, Params){ .context = ctx, .allocator = allocator };
+    var parser = CliParser(NoOptions, Params){ .context = ctx, .allocator = allocator };
     const params = try parser.parse(&arguments);
     try std.testing.expectEqualStrings("Argument1", params.arguments.arg_1.?);
 }
@@ -424,7 +434,7 @@ test "parse many arguments" {
         arg_1: ?[]const u8 = null,
         arg_2: ?[]const u8 = null,
     };
-    const parser = CliParser(NoOptions, Params){ .context = ctx, .allocator = allocator };
+    var parser = CliParser(NoOptions, Params){ .context = ctx, .allocator = allocator };
     const params = try parser.parse(&arguments);
     try std.testing.expectEqualStrings("Argument1", params.arguments.arg_1.?);
 }
@@ -437,7 +447,7 @@ test "parse integer argument" {
     const Params = struct {
         arg_1: i32,
     };
-    const parser = CliParser(NoOptions, Params){ .context = ctx, .allocator = allocator };
+    var parser = CliParser(NoOptions, Params){ .context = ctx, .allocator = allocator };
     const params = try parser.parse(&arguments);
     try std.testing.expectEqual(42, params.arguments.arg_1);
 }
@@ -450,7 +460,7 @@ test "parse float argument" {
     const Params = struct {
         arg_1: f64,
     };
-    const parser = CliParser(NoOptions, Params){ .context = ctx, .allocator = allocator };
+    var parser = CliParser(NoOptions, Params){ .context = ctx, .allocator = allocator };
     const params = try parser.parse(&arguments);
     try std.testing.expectEqual(3.14, params.arguments.arg_1);
 }
@@ -463,7 +473,7 @@ test "parse boolean flag" {
     const Options = struct {
         enable: bool,
     };
-    const parser = CliParser(Options, NoArguments){ .context = ctx, .allocator = allocator };
+    var parser = CliParser(Options, NoArguments){ .context = ctx, .allocator = allocator };
     const params = try parser.parse(&arguments);
     try std.testing.expect(params.options.enable);
 }
@@ -475,7 +485,7 @@ test "parse choices valid case" {
     const Options = struct {
         choice: Choices,
     };
-    const parser = CliParser(Options, NoArguments){ .context = ctx, .allocator = allocator };
+    var parser = CliParser(Options, NoArguments){ .context = ctx, .allocator = allocator };
 
     const test_cases: [3][]const u8 = .{
         "testcli --choice choice_a",
@@ -501,7 +511,7 @@ test "parse choices invalid case" {
     const Options = struct {
         choice: Choices,
     };
-    const parser = CliParser(Options, NoArguments){
+    var parser = CliParser(Options, NoArguments){
         .context = ctx,
         .allocator = allocator,
     };
@@ -516,7 +526,7 @@ test "parse help" {
     const ctx = CliContext{};
 
     var arguments = std.mem.split(u8, prompt, " ");
-    const parser = CliParser(NoOptions, NoOptions){
+    var parser = CliParser(NoOptions, NoOptions){
         .context = ctx,
         .allocator = allocator,
     };
@@ -539,7 +549,7 @@ test "build short flag map" {
         abcfg: bool, // expects -abc
         cba: bool, // expects -c
     };
-    const parser = CliParser(TestOptions, NoOptions){
+    var parser = CliParser(TestOptions, NoOptions){
         .context = ctx,
         .allocator = allocator,
     };
