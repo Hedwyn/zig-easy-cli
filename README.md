@@ -5,18 +5,14 @@ See the small demo in `main.zig`:
 ```zig
 /// Small demo code
 const std = @import("std");
-const easycli = @import("root.zig");
+const easycli = @import("parser.zig");
 
-const DemoOptions = struct { surname: ?[]const u8 };
+const DemoOptions = struct { surname: ?[]const u8, grade: enum { Employee, Boss } };
 const DemoArgs = struct { name: ?[]const u8 };
 
 pub fn main() !void {
-    var args_it = std.process.args();
-    const allocator = std.heap.page_allocator;
-    const ctx = easycli.CliContext{};
-    const parser = easycli.CliParser(DemoOptions, DemoArgs){ .context = ctx, .allocator = allocator };
-    const params = try parser.parse(&args_it);
-
+    const ParserT = easycli.CliParser(DemoOptions, DemoArgs);
+    const params = if (try ParserT.run_standalone()) |p| p else return;
     const name = if (params.arguments.name) |n| n else {
         std.debug.print("You need to pass your name !\n", .{});
         return;
@@ -27,7 +23,6 @@ pub fn main() !void {
         std.debug.print("Hello {s}!\n", .{name});
     }
 }
-
 ```
 
 You can run it with:

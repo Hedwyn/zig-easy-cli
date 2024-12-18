@@ -375,6 +375,22 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                 }
             }
         }
+
+        pub fn run_standalone() !?Params {
+            const allocator = std.heap.page_allocator;
+            var args_it = std.process.args();
+            const writer = std.io.getStdOut().writer();
+            const ctx = CliContext{};
+            const parser = Self{ .context = ctx, .allocator = allocator };
+            const params = try parser.parse(&args_it);
+
+            if (params.builtin.help) {
+                // _ = try writer.write("Pass your name as argument and optionally your surname with --surname !\n");
+                try parser.emitHelp(writer);
+                return null;
+            }
+            return params;
+        }
     };
 }
 
