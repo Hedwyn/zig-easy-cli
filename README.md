@@ -38,4 +38,15 @@ zig build run -- John
 zig build run -- John --surname Doe
 
 >>> Hello John Doe!
+
+zig build run -- --help
+===== Usage =====
+
+Arguments
+---------
+name: (Optional) text
+
+Options
+-------
+-s, --surname: (Optional) text
 ```
