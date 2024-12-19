@@ -2,12 +2,13 @@
 const std = @import("std");
 const easycli = @import("parser.zig");
 
+const OptionInfo = easycli.OptionInfo;
 const DemoOptions = struct { surname: ?[]const u8, grade: enum { Employee, Boss } };
 const DemoArgs = struct { name: ?[]const u8 };
 
 pub fn main() !void {
     const ParserT = easycli.CliParser(DemoOptions, DemoArgs);
-    const params = if (try ParserT.runStandalone()) |p| p else return;
+    const params = if (try ParserT.runStandalone(.{})) |p| p else return;
     const name = if (params.arguments.name) |n| n else {
         std.debug.print("You need to pass your name !\n", .{});
         return;

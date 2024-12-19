@@ -13,9 +13,23 @@ const panic = std.debug.panic;
 
 const default_welcome_message = "Welcome to {s} !\n";
 
+pub const ArgInfo = struct {
+    name: []const u8 = null,
+    help: ?[]const u8 = null,
+};
+
+pub const OptionInfo = struct {
+    name: []const u8,
+    short_name: ?[]const u8 = null,
+    internal_name: ?[]const u8 = null,
+    help: ?[]const u8 = null,
+};
+
 pub const CliContext = struct {
     name: ?[]const u8 = null,
     comptime welcome_msg: ?[]const u8 = null,
+    options_info: ?std.StaticStringMap(OptionInfo) = null,
+    arg_info: ?std.StaticStringMap(ArgInfo) = null,
 };
 
 pub const CliError = error{
@@ -158,21 +172,37 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             return CliError.UnknownArgument;
         }
 
-        pub fn buildShortFlagMap(self: Self, reverse: bool) std.StringHashMap([]const u8) {
-            var map = std.StringHashMap([]const u8).init(self.allocator);
-            var reversed_map = std.StringHashMap([]const u8).init(self.allocator);
+        pub fn buildShortFlagMap(self: Self, use_short_name: bool) std.StringHashMap(OptionInfo) {
+            var map = std.StringHashMap(OptionInfo).init(self.allocator);
+            var reversed_map = std.StringHashMap(OptionInfo).init(self.allocator);
 
             inline for (OptionSt.fields) |field| {
                 var slice_index: usize = 1;
                 var slice = field.name[0..slice_index];
-                while (reversed_map.contains(slice)) {
-                    slice_index += 1;
-                    slice = field.name[0..slice_index];
+                var short_flag: ?[]const u8 = null;
+                var option_info: ?OptionInfo = null;
+                if (self.context.options_info) |options_info| {
+                    // Checking if there's an entry in the documentation for this option
+                    if (options_info.get(field.name)) |opt| {
+                        option_info = opt;
+                        short_flag = opt.short_name;
+                    }
+                } else {
+                    option_info = OptionInfo{ .name = field.name };
                 }
-                reversed_map.put(slice, field.name) catch unreachable;
-                map.put(field.name, slice) catch unreachable;
+                if (short_flag == null) {
+                    // building flag
+                    while (reversed_map.contains(slice)) {
+                        slice_index += 1;
+                        slice = field.name[0..slice_index];
+                    }
+                    short_flag = slice;
+                    option_info.?.short_name = short_flag;
+                }
+                reversed_map.put(short_flag.?, option_info.?) catch unreachable;
+                map.put(field.name, option_info.?) catch unreachable;
             }
-            return if (reverse) reversed_map else map;
+            return if (use_short_name) reversed_map else map;
         }
 
         pub fn hasArguments() bool {
@@ -252,8 +282,8 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             const arguments: *ArgT = self.allocator.create(ArgT) catch return CliError.MemoryError;
             const builtin_options = self.allocator.create(BuiltinOptions) catch return CliError.MemoryError;
 
-            var short_flags = self.buildShortFlagMap(true);
-            defer short_flags.deinit();
+            var option_info_map = self.buildShortFlagMap(true);
+            defer option_info_map.deinit();
             initOptionals(OptionT, options);
             initOptionals(ArgT, arguments);
 
@@ -313,7 +343,7 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                     },
                     .ShortFlag => {
                         is_option = true;
-                        current_arg_name = short_flags.get(arg[arg_name_start_idx..]) orelse return CliError.UnknownOption;
+                        current_arg_name = if (option_info_map.get(arg[arg_name_start_idx..])) |opt| opt.name else return CliError.UnknownOption;
                         if (try isFlag(current_arg_name)) {
                             try parseFlag(current_arg_name, params);
                         }
@@ -367,7 +397,7 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                 _ = try writer.write("\n");
                 inline for (std.meta.fields(OptionT)) |field| {
                     try writer.print("-{s}, --{s}: {s}\n", .{
-                        flag_map.get(field.name).?,
+                        flag_map.get(field.name).?.short_name.?,
                         field.name,
                         getTypeName(field.type),
                     });
@@ -375,11 +405,11 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             }
         }
 
-        pub fn runStandalone() !?Params {
+        pub fn runStandalone(context: CliContext) !?Params {
             const allocator = std.heap.page_allocator;
             var args_it = std.process.args();
             const writer = std.io.getStdOut().writer();
-            var parser = Self{ .context = .{}, .allocator = allocator };
+            var parser = Self{ .context = context, .allocator = allocator };
             const params = try parser.parse(&args_it);
             std.debug.assert(parser.context.name != null);
             try parser.emitWelcomeMessage(writer);
@@ -554,8 +584,8 @@ test "build short flag map" {
         .allocator = allocator,
     };
     const short_flag_map = parser.buildShortFlagMap(false);
-    try std.testing.expectEqualStrings("a", short_flag_map.get("abcde").?);
-    try std.testing.expectEqualStrings("ab", short_flag_map.get("abd").?);
-    try std.testing.expectEqualStrings("abc", short_flag_map.get("abcfg").?);
-    try std.testing.expectEqualStrings("c", short_flag_map.get("cba").?);
+    try std.testing.expectEqualStrings("a", short_flag_map.get("abcde").?.short_name.?);
+    try std.testing.expectEqualStrings("ab", short_flag_map.get("abd").?.short_name.?);
+    try std.testing.expectEqualStrings("abc", short_flag_map.get("abcfg").?.short_name.?);
+    try std.testing.expectEqualStrings("c", short_flag_map.get("cba").?.short_name.?);
 }
