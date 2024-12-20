@@ -14,7 +14,7 @@ const panic = std.debug.panic;
 const default_welcome_message = "Welcome to {s} !\n";
 
 pub const ArgInfo = struct {
-    name: []const u8 = null,
+    name: []const u8,
     help: ?[]const u8 = null,
 };
 
@@ -28,8 +28,26 @@ pub const OptionInfo = struct {
 pub const CliContext = struct {
     name: ?[]const u8 = null,
     comptime welcome_msg: ?[]const u8 = null,
-    options_info: ?std.StaticStringMap(OptionInfo) = null,
-    arg_info: ?std.StaticStringMap(ArgInfo) = null,
+    options_info: []const OptionInfo = &.{},
+    arg_info: []const ArgInfo = &.{},
+
+    pub fn getOptionInfo(self: CliContext, option_name: []const u8) ?OptionInfo {
+        for (self.options_info) |opt| {
+            if (std.mem.eql(u8, opt.name, option_name)) {
+                return opt;
+            }
+        }
+        return null;
+    }
+
+    pub fn getArgInfo(self: CliContext, arg_name: []const u8) ?ArgInfo {
+        for (self.arg_info) |arg| {
+            if (std.mem.eql(u8, arg.name, arg_name)) {
+                return arg;
+            }
+        }
+        return null;
+    }
 };
 
 pub const CliError = error{
@@ -181,12 +199,10 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                 var slice = field.name[0..slice_index];
                 var short_flag: ?[]const u8 = null;
                 var option_info: ?OptionInfo = null;
-                if (self.context.options_info) |options_info| {
-                    // Checking if there's an entry in the documentation for this option
-                    if (options_info.get(field.name)) |opt| {
-                        option_info = opt;
-                        short_flag = opt.short_name;
-                    }
+                // Checking if there's an entry in the documentation for this option
+                if (self.context.getOptionInfo(field.name)) |opt| {
+                    option_info = opt;
+                    short_flag = opt.short_name;
                 } else {
                     option_info = OptionInfo{ .name = field.name };
                 }
@@ -386,6 +402,11 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                         field.name,
                         getTypeName(field.type),
                     });
+                    if (self.context.getArgInfo(field.name)) |arg| {
+                        if (arg.help) |help| {
+                            try writer.print("    {s}\n", .{help});
+                        }
+                    }
                 }
             }
             _ = try writer.write("\n");
@@ -401,6 +422,11 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                         field.name,
                         getTypeName(field.type),
                     });
+                    if (self.context.getOptionInfo(field.name)) |opt| {
+                        if (opt.help) |help| {
+                            try writer.print("    {s}\n", .{help});
+                        }
+                    }
                 }
             }
         }
@@ -414,7 +440,6 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             std.debug.assert(parser.context.name != null);
             try parser.emitWelcomeMessage(writer);
             if (params.builtin.help) {
-                // _ = try writer.write("Pass your name as argument and optionally your surname with --surname !\n");
                 try parser.emitHelp(writer);
                 return null;
             }
