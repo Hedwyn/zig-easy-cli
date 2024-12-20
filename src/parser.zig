@@ -13,6 +13,17 @@ const panic = std.debug.panic;
 
 const default_welcome_message = "Welcome to {s} !\n";
 
+/// Returns the last member of a path separated by `/`
+pub fn getPathBasename(path: []const u8) []const u8 {
+    // TODO: windows
+    var basename = path;
+    var split_it = std.mem.split(u8, basename, "/");
+    while (split_it.next()) |chunk| {
+        basename = chunk;
+    }
+    return basename;
+}
+
 pub const ArgInfo = struct {
     name: []const u8,
     help: ?[]const u8 = null,
@@ -316,7 +327,7 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
 
             // If no explicit client name was passed,using process name
             const process_name: []const u8 = arg_it.next() orelse return CliError.EmptyArguments;
-            self.context.name = self.context.name orelse process_name;
+            self.context.name = self.context.name orelse getPathBasename(process_name);
             var next_arg = arg_it.next();
             var consume = true;
 
@@ -379,7 +390,10 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
         pub fn emitWelcomeMessage(self: Self, writer: Writer) !void {
             if (self.context.name) |name| {
                 const welcome_msg = self.context.welcome_msg orelse default_welcome_message;
-                return try writer.print(welcome_msg, .{name});
+                try writer.print("\n", .{});
+                try writer.print(welcome_msg, .{name});
+                try writer.print("\n", .{});
+                return;
             }
             @panic(
                 \\No client name given and the parser has not run,
@@ -388,9 +402,18 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
         }
 
         pub fn emitHelp(self: Self, writer: Writer) !void {
+            // TODO: divide this into smaller functions
             var flag_map = self.buildShortFlagMap(false);
             defer flag_map.deinit();
             _ = try writer.write("===== Usage =====\n\n");
+            // Showing typical usage
+            try writer.print(">>> {s}", .{self.context.name.?});
+            inline for (std.meta.fields(ArgT)) |field| {
+                try writer.print(" {{{s}}}  ", .{field.name});
+            }
+            _ = try writer.write("\n\n");
+
+            // Formatting argument doc
             if (hasArguments()) {
                 _ = try writer.write(
                     \\Arguments
