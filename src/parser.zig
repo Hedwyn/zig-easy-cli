@@ -17,7 +17,7 @@ const panic = std.debug.panic;
 const RichWriter = styling.RichWriter;
 const Style = styling.Style;
 
-const default_welcome_message = "*** Welcome to {s} ! ***";
+const default_welcome_message = "Welcome to {s} !";
 
 /// Returns the last member of a path separated by `/`
 pub fn getPathBasename(path: []const u8) []const u8 {
