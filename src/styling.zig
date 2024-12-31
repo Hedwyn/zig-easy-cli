@@ -21,9 +21,115 @@ pub const yellow_bg = esc ++ "[43m";
 
 const reset = esc ++ "[0m";
 
+const max_ansi_color_code_len = 16;
+const AnsiColorCodes = enum(u16) {
+    black = 30,
+    red,
+    green,
+    yellow,
+    blue,
+    lagenta,
+    cyan,
+    white,
+    default,
+
+    // 256 bits colors below
+    // Adding a 256 bits offset to differentiate from
+    // base colors
+    clay = 256 + 172,
+
+    pub fn asText(self: AnsiColorCodes) []const u8 {
+        inline for (std.meta.fields(AnsiColorCodes)) |field| {
+            const is_256bits = field.value >= 0xFF;
+            const fmt = comptime if (is_256bits) "[38;5;{}m" else "[{}m";
+            const value = comptime if (is_256bits) field.value & 0xFF else field.value;
+
+            const code = comptime blk: {
+                var buf: [max_ansi_color_code_len]u8 = undefined;
+                break :blk std.fmt.bufPrint(
+                    &buf,
+                    fmt,
+                    .{value},
+                ) catch panic(
+                    "Internal error: buffer size for ANSI color codes it too small when text code {any}",
+                    .{self},
+                );
+            };
+            if ((field.value) == @intFromEnum(self)) {
+                return esc ++ code;
+            }
+        }
+        unreachable;
+    }
+
+    pub fn asBackground(self: AnsiColorCodes) []const u8 {
+        inline for (std.meta.fields(AnsiColorCodes)) |field| {
+            const is_256bits = field.value >= 0xFF;
+            const fmt = comptime if (is_256bits) "[48;5;{}m" else "[{}m";
+            const value = comptime if (is_256bits) field.value & 0xFF else field.value + 10;
+            const code = comptime blk: {
+                var buf: [max_ansi_color_code_len]u8 = undefined;
+                break :blk std.fmt.bufPrint(
+                    &buf,
+                    fmt,
+                    .{value},
+                ) catch panic(
+                    "Internal error: buffer size for ANSI color codes it too small when formattting background code {any}",
+                    .{self},
+                );
+            };
+            if ((field.value) == @intFromEnum(self)) {
+                return esc ++ code;
+            }
+        }
+        unreachable;
+    }
+};
+
+test "ansi color codes" {
+    try std.testing.expectEqualStrings(
+        esc ++ "[30m",
+        AnsiColorCodes.black.asText(),
+    );
+    try std.testing.expectEqualStrings(
+        esc ++ "[37m",
+        AnsiColorCodes.white.asText(),
+    );
+
+    try std.testing.expectEqualStrings(
+        blue_bg,
+        AnsiColorCodes.blue.asBackground(),
+    );
+
+    try std.testing.expectEqualSlices(
+        u8,
+        clay_bg,
+        AnsiColorCodes.clay.asBackground(),
+    );
+
+    try std.testing.expectEqualStrings(
+        esc ++ "[40m",
+        AnsiColorCodes.black.asBackground(),
+    );
+    try std.testing.expectEqualStrings(
+        esc ++ "[47m",
+        AnsiColorCodes.white.asBackground(),
+    );
+}
+
 const StyleOptions = struct {
-    text_color: ?[]const u8 = null,
-    bg_color: ?[]const u8 = null,
+    text_color: ?AnsiColorCodes = null,
+    bg_color: ?AnsiColorCodes = null,
+
+    pub fn getTextColor(self: StyleOptions) []const u8 {
+        const color = self.text_color orelse AnsiColorCodes.default;
+        return color.asText();
+    }
+
+    pub fn getBackgroundColor(self: StyleOptions) []const u8 {
+        const color = self.bg_color orelse AnsiColorCodes.default;
+        return color.asBackground();
+    }
 };
 
 const FrameParameters = struct {
@@ -70,12 +176,8 @@ pub const RichWriter = struct {
         options: StyleOptions,
         args: anytype,
     ) void {
-        if (options.bg_color) |bg_color| {
-            self.write(bg_color);
-        }
-        if (options.text_color) |color| {
-            self.write(color);
-        }
+        self.write(options.getBackgroundColor());
+        self.write(options.getTextColor());
         self.print(format, args);
         self.write(reset);
         self.write("\n");
@@ -83,8 +185,8 @@ pub const RichWriter = struct {
 
     pub fn richPrint(self: RichWriter, comptime format: []const u8, style: Style, args: anytype) void {
         switch (style) {
-            .Header1 => self.styledPrint(format, .{ .text_color = black, .bg_color = clay_bg }, args),
-            .Header2 => self.styledPrint(format, .{ .text_color = black, .bg_color = yellow_bg }, args),
+            .Header1 => self.styledPrint(format, .{ .text_color = .black, .bg_color = .clay }, args),
+            .Header2 => self.styledPrint(format, .{ .text_color = .black, .bg_color = .yellow }, args),
 
             else => panic("Not supported {any}", .{style}),
         }
