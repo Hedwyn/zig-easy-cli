@@ -22,6 +22,7 @@ pub const yellow_bg = esc ++ "[43m";
 const bold = esc ++ "[1m";
 const dim = esc ++ "[2m";
 const italic = esc ++ "[3m";
+const underline = esc ++ "[4m";
 
 const reset = esc ++ "[0m";
 
@@ -41,6 +42,7 @@ const AnsiColorCodes = enum(u16) {
     // Adding a 256 bits offset to differentiate from
     // base colors
     clay = 256 + 172,
+    turquoise = 256 + 29,
 
     pub fn asText(self: AnsiColorCodes) []const u8 {
         inline for (std.meta.fields(AnsiColorCodes)) |field| {
@@ -128,6 +130,8 @@ const StyleOptions = struct {
     italic: bool = false,
     dim: bool = false,
     framed: bool = false,
+    line_breaks: usize = 1,
+    frame_params: ?FrameParameters = null,
 
     pub fn getTextColor(self: StyleOptions) []const u8 {
         const color = self.text_color orelse AnsiColorCodes.default;
@@ -149,9 +153,8 @@ const FrameParameters = struct {
 pub const Style = enum {
     Header1,
     Header2,
-    Header3,
-    Bold,
-    Italic,
+    Entry,
+    Field,
 
     pub fn lookupPalette(self: Style, palette: std.StaticStringMap(StyleOptions)) ?StyleOptions {
         inline for (std.meta.fields(Style)) |field| {
@@ -162,11 +165,6 @@ pub const Style = enum {
         unreachable;
     }
 };
-
-const default_palette = std.StaticStringMap(StyleOptions).initComptime(.{
-    .{ "Header1", .{ .text_color = .clay, .framed = true, .bold = true } },
-    .{ "Header2", .{ .text_color = .black, .bg_color = .yellow, .italic = true } },
-});
 
 pub const RichWriter = struct {
     writer: *const Writer,
@@ -210,12 +208,14 @@ pub const RichWriter = struct {
         self.write(options.getBackgroundColor());
         self.write(options.getTextColor());
         if (options.framed) {
-            printFramedText(self.writer, .{}, format, args) catch unreachable;
+            printFramedText(self.writer, options.frame_params orelse .{}, format, args) catch unreachable;
         } else {
             self.print(format, args);
         }
         self.write(reset);
-        self.write("\n");
+        for (options.line_breaks) |_| {
+            self.write("\n");
+        }
     }
 
     pub fn richPrint(self: RichWriter, comptime format: []const u8, style: Style, args: anytype) void {
@@ -232,14 +232,18 @@ const CellContent = union(enum) { frame, pad, text: usize };
 const max_terminal_size = 100 * 100;
 
 pub fn printFramedText(writer: *const Writer, parameters: FrameParameters, comptime format: []const u8, args: anytype) !void {
-    const char = parameters.char;
-    const horizontal_pad = parameters.horizontal_pad;
-    const vertical_pad = parameters.vertical_pad;
-
     var buf: [max_terminal_size]u8 = undefined;
     const text = std.fmt.bufPrint(&buf, format, args) catch {
         panic("Configured max terminal size is unsufficient", .{});
     };
+    try writeFramedText(writer, text, parameters);
+}
+
+pub fn writeFramedText(writer: *const Writer, text: []const u8, parameters: FrameParameters) !void {
+    const char = parameters.char;
+    const horizontal_pad = parameters.horizontal_pad;
+    const vertical_pad = parameters.vertical_pad;
+
     // computing dimensions
     const width = text.len + 2 * (horizontal_pad + 1);
     const height = 1 + 2 * (vertical_pad + 1);
@@ -271,41 +275,20 @@ pub fn printFramedText(writer: *const Writer, parameters: FrameParameters, compt
             try writer.writeByte('\n');
         }
     }
-}
-
-pub fn frameText(writer: Writer, text: []const u8, parameters: FrameParameters) !void {
-    const char = parameters.char;
-    const horizontal_pad = parameters.horizontal_pad;
-    const vertical_pad = parameters.vertical_pad;
-
-    // computing dimensions
-    const width = text.len + 2 * (horizontal_pad + 1);
-    const height = 1 + 2 * (vertical_pad + 1);
-    const text_starts = 1 + horizontal_pad;
-    const text_position = 1 + vertical_pad;
-    try writer.writeByte('\n');
-    for (0..height) |j| {
-        for (0..width) |i| {
-            var content: CellContent = CellContent.pad;
-            if ((i == width - 1) or (i == 0)) {
-                content = CellContent.frame;
-            }
-            if ((j == height - 1) or (j == 0)) {
-                content = CellContent.frame;
-            }
-            const text_idx: i32 = @as(i32, @intCast(i)) - @as(i32, @intCast(text_starts));
-            if ((j == text_position) and (text_idx >= 0) and (text_idx < text.len)) {
-                content = CellContent{ .text = @intCast(text_idx) };
-            }
-
-            const char_to_draw = switch (content) {
-                .pad => ' ',
-                .frame => char,
-                .text => |*idx| text[idx.*],
-            };
-            try writer.writeByte(char_to_draw);
-        }
-        try writer.writeByte('\n');
-    }
     try writer.writeByte('\n');
 }
+
+// Base color palettes
+const clay_palette = std.StaticStringMap(StyleOptions).initComptime(.{
+    .{ "Header1", .{ .text_color = .clay, .framed = true, .bold = true } },
+    .{ "Header2", .{ .text_color = .black, .bg_color = .yellow } },
+    .{ "Entry", .{ .italic = true } },
+    .{ "Field", .{ .italic = true, .line_breaks = 0 } },
+});
+const blueish_palette = std.StaticStringMap(StyleOptions).initComptime(.{
+    .{ "Header1", .{ .text_color = .cyan, .bg_color = .black, .bold = true, .framed = true } },
+    .{ "Header2", .{ .text_color = .cyan, .bg_color = .black } },
+    .{ "Entry", .{ .italic = true } },
+    .{ "Field", .{ .italic = true, .line_breaks = 0 } },
+});
+const default_palette = blueish_palette;

@@ -397,7 +397,6 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             const rich = RichWriter{ .writer = writer };
             if (self.context.name) |name| {
                 const welcome_msg = self.context.welcome_msg orelse default_welcome_message;
-                rich.print("\n", .{});
                 rich.richPrint(welcome_msg, Style.Header1, .{name});
                 rich.print("\n", .{});
                 return;
@@ -415,9 +414,9 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             defer flag_map.deinit();
             rich.richPrint("===== Usage =====", .Header2, .{});
             // Showing typical usage
-            rich.print(">>> {s}", .{self.context.name.?});
+            rich.richPrint(">>> {s}", .Field, .{self.context.name.?});
             inline for (std.meta.fields(ArgT)) |field| {
-                rich.print(" {{{s}}}  ", .{field.name});
+                rich.richPrint(" {{{s}}}  ", .Field, .{field.name});
             }
             rich.write("\n\n");
 
@@ -429,16 +428,21 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                     .{},
                 );
                 inline for (std.meta.fields(ArgT)) |field| {
-                    rich.print("{s}: {s}\n", .{
-                        field.name,
-                        getTypeName(field.type),
-                    });
+                    rich.richPrint(
+                        "{s}: {s}",
+                        .Entry,
+                        .{
+                            field.name,
+                            getTypeName(field.type),
+                        },
+                    );
                     if (self.context.getArgInfo(field.name)) |arg| {
                         if (arg.help) |help| {
                             rich.print("    {s}\n", .{help});
                         }
                     }
                 }
+                rich.write("\n");
             }
             if (hasOptions()) {
                 rich.richPrint(
@@ -447,11 +451,15 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                     .{},
                 );
                 inline for (std.meta.fields(OptionT)) |field| {
-                    rich.print("-{s}, --{s}: {s}\n", .{
-                        flag_map.get(field.name).?.short_name.?,
-                        field.name,
-                        getTypeName(field.type),
-                    });
+                    rich.richPrint(
+                        "-{s}, --{s}: {s}",
+                        .Entry,
+                        .{
+                            flag_map.get(field.name).?.short_name.?,
+                            field.name,
+                            getTypeName(field.type),
+                        },
+                    );
                     if (self.context.getOptionInfo(field.name)) |opt| {
                         if (opt.help) |help| {
                             rich.print("    {s}\n", .{help});
