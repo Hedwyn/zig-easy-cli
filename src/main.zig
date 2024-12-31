@@ -17,7 +17,10 @@ const arg_doc = [_]ArgInfo{
 };
 pub fn main() !void {
     const ParserT = easycli.CliParser(DemoOptions, DemoArgs);
-    const params = if (try ParserT.runStandalone(.{ .options_info = &options_doc, .arg_info = &arg_doc })) |p| p else return;
+    const params = if (try ParserT.runStandalone(.{
+        .options_info = &options_doc,
+        .arg_info = &arg_doc,
+    })) |p| p else return;
     const name = if (params.arguments.name) |n| n else {
         std.debug.print("You need to pass your name !\n", .{});
         return;

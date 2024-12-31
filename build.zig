@@ -24,6 +24,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     _ = b.addModule("parser", .{ .root_source_file = b.path("src/parser.zig") });
+    _ = b.addModule("styling", .{ .root_source_file = b.path("src/styling.zig") });
+
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
     // running `zig build`).
