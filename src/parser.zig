@@ -1,5 +1,8 @@
 /// Engine for the CLI utility
 const std = @import("std");
+const styling = @import("styling.zig");
+const fmt = std.fmt;
+
 const testing = std.testing;
 const File = std.fs.File;
 const Writer = File.Writer;
@@ -11,7 +14,10 @@ const Allocator = std.mem.Allocator;
 const ArgIterator = anyopaque;
 const panic = std.debug.panic;
 
-const default_welcome_message = "Welcome to {s} !\n";
+const RichWriter = styling.RichWriter;
+const Style = styling.Style;
+
+const default_welcome_message = "*** Welcome to {s} ! ***";
 
 /// Returns the last member of a path separated by `/`
 pub fn getPathBasename(path: []const u8) []const u8 {
@@ -387,12 +393,13 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             return params;
         }
 
-        pub fn emitWelcomeMessage(self: Self, writer: Writer) !void {
+        pub fn emitWelcomeMessage(self: Self, writer: *const Writer) !void {
+            const rich = RichWriter{ .writer = writer };
             if (self.context.name) |name| {
                 const welcome_msg = self.context.welcome_msg orelse default_welcome_message;
-                try writer.print("\n", .{});
-                try writer.print(welcome_msg, .{name});
-                try writer.print("\n", .{});
+                rich.print("\n", .{});
+                rich.richPrint(welcome_msg, Style.Header1, .{name});
+                rich.print("\n", .{});
                 return;
             }
             @panic(
@@ -401,53 +408,53 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             );
         }
 
-        pub fn emitHelp(self: Self, writer: Writer) !void {
+        pub fn emitHelp(self: Self, writer: *const Writer) !void {
             // TODO: divide this into smaller functions
             var flag_map = self.buildShortFlagMap(false);
+            const rich = RichWriter{ .writer = writer };
             defer flag_map.deinit();
-            _ = try writer.write("===== Usage =====\n\n");
+            rich.richPrint("===== Usage =====", .Header2, .{});
             // Showing typical usage
-            try writer.print(">>> {s}", .{self.context.name.?});
+            rich.print(">>> {s}", .{self.context.name.?});
             inline for (std.meta.fields(ArgT)) |field| {
-                try writer.print(" {{{s}}}  ", .{field.name});
+                rich.print(" {{{s}}}  ", .{field.name});
             }
-            _ = try writer.write("\n\n");
+            rich.write("\n\n");
 
             // Formatting argument doc
             if (hasArguments()) {
-                _ = try writer.write(
-                    \\Arguments
-                    \\---------
+                rich.richPrint(
+                    "=== Arguments ===",
+                    .Header2,
+                    .{},
                 );
-                _ = try writer.write("\n");
                 inline for (std.meta.fields(ArgT)) |field| {
-                    try writer.print("{s}: {s}\n", .{
+                    rich.print("{s}: {s}\n", .{
                         field.name,
                         getTypeName(field.type),
                     });
                     if (self.context.getArgInfo(field.name)) |arg| {
                         if (arg.help) |help| {
-                            try writer.print("    {s}\n", .{help});
+                            rich.print("    {s}\n", .{help});
                         }
                     }
                 }
             }
-            _ = try writer.write("\n");
             if (hasOptions()) {
-                _ = try writer.write(
-                    \\Options
-                    \\-------
+                rich.richPrint(
+                    "==== Options ====",
+                    .Header2,
+                    .{},
                 );
-                _ = try writer.write("\n");
                 inline for (std.meta.fields(OptionT)) |field| {
-                    try writer.print("-{s}, --{s}: {s}\n", .{
+                    rich.print("-{s}, --{s}: {s}\n", .{
                         flag_map.get(field.name).?.short_name.?,
                         field.name,
                         getTypeName(field.type),
                     });
                     if (self.context.getOptionInfo(field.name)) |opt| {
                         if (opt.help) |help| {
-                            try writer.print("    {s}\n", .{help});
+                            rich.print("    {s}\n", .{help});
                         }
                     }
                 }
@@ -461,9 +468,9 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
             var parser = Self{ .context = context, .allocator = allocator };
             const params = try parser.parse(&args_it);
             std.debug.assert(parser.context.name != null);
-            try parser.emitWelcomeMessage(writer);
+            try parser.emitWelcomeMessage(&writer);
             if (params.builtin.help) {
-                try parser.emitHelp(writer);
+                try parser.emitHelp(&writer);
                 return null;
             }
             return params;

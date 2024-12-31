@@ -2,11 +2,93 @@
 const std = @import("std");
 const File = std.fs.File;
 const Writer = File.Writer;
+const NullWriter = std.io.NullWriter;
+
+const WriteError = File.WriteError;
+const panic = std.debug.panic;
+
+const esc = "\u{001b}";
+
+// Text colors (= their background counterpart - 10)
+pub const black = esc ++ "[30m";
+
+// Background colors (= their text counterpart + 10)
+pub const green_bg = esc ++ "[42m";
+pub const clay_bg = esc ++ "[48;5;172m";
+pub const blue_bg = esc ++ "[44m";
+pub const cyan_bg = esc ++ "[46m";
+pub const yellow_bg = esc ++ "[43m";
+
+const reset = esc ++ "[0m";
+
+const StyleOptions = struct {
+    text_color: ?[]const u8 = null,
+    bg_color: ?[]const u8 = null,
+};
 
 const FrameParameters = struct {
     char: u8 = '=',
     horizontal_pad: usize = 2,
     vertical_pad: usize = 1,
+};
+
+pub const Style = enum {
+    Header1,
+    Header2,
+    Header3,
+    Bold,
+    Italic,
+};
+
+pub const RichWriter = struct {
+    writer: *const Writer,
+    on_error: ?(*const fn (WriteError) void) = null,
+
+    pub fn write(self: RichWriter, bytes: []const u8) void {
+        _ = self.writer.write(bytes) catch |err| {
+            if (self.on_error) |handler| {
+                handler(err);
+            } else panic("Writer {} failed to write {s}, no error handler defined\n", .{ self, bytes });
+        };
+    }
+
+    pub fn print(self: RichWriter, comptime format: []const u8, args: anytype) void {
+        _ = self.writer.print(format, args) catch |err| {
+            if (self.on_error) |handler| {
+                handler(err);
+            } else panic("Writer {} failed to print {s} with arguments {any}, no error handler defined\n", .{
+                self,
+                format,
+                args,
+            });
+        };
+    }
+
+    pub fn styledPrint(
+        self: RichWriter,
+        comptime format: []const u8,
+        options: StyleOptions,
+        args: anytype,
+    ) void {
+        if (options.bg_color) |bg_color| {
+            self.write(bg_color);
+        }
+        if (options.text_color) |color| {
+            self.write(color);
+        }
+        self.print(format, args);
+        self.write(reset);
+        self.write("\n");
+    }
+
+    pub fn richPrint(self: RichWriter, comptime format: []const u8, style: Style, args: anytype) void {
+        switch (style) {
+            .Header1 => self.styledPrint(format, .{ .text_color = black, .bg_color = clay_bg }, args),
+            .Header2 => self.styledPrint(format, .{ .text_color = black, .bg_color = yellow_bg }, args),
+
+            else => panic("Not supported {any}", .{style}),
+        }
+    }
 };
 
 const CellContent = union(enum) { frame, pad, text: usize };
