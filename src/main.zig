@@ -5,7 +5,10 @@ const easycli = @import("parser.zig");
 const OptionInfo = easycli.OptionInfo;
 const ArgInfo = easycli.ArgInfo;
 
-const DemoOptions = struct { surname: ?[]const u8, grade: enum { Employee, Boss } };
+const DemoOptions = struct {
+    surname: ?[]const u8,
+    grade: enum { Employee, Boss } = .Employee,
+};
 const DemoArgs = struct { name: ?[]const u8 };
 
 const options_doc = [_]OptionInfo{

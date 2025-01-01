@@ -453,13 +453,17 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
                 inline for (std.meta.fields(OptionT)) |field| {
                     rich.richPrint(
                         "-{s}, --{s}: {s}",
-                        .Entry,
+                        .Field,
                         .{
                             flag_map.get(field.name).?.short_name.?,
                             field.name,
                             getTypeName(field.type),
                         },
                     );
+                    if (field.default_value) |default| {
+                        rich.richPrint("    [default:{any}]", .Field, .{default});
+                    }
+                    rich.write("\n");
                     if (self.context.getOptionInfo(field.name)) |opt| {
                         if (opt.help) |help| {
                             rich.print("    {s}\n", .{help});
