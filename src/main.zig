@@ -19,7 +19,7 @@ const arg_doc = [_]ArgInfo{
     .{ .name = "name", .help = "Your name" },
 };
 pub fn main() !void {
-    const ParserT = easycli.CliParser(DemoOptions, DemoArgs);
+    const ParserT = easycli.CliParser(.{ .opts = DemoOptions, .args = DemoArgs });
     const params = if (try ParserT.runStandalone(.{
         .options_info = &options_doc,
         .arg_info = &arg_doc,

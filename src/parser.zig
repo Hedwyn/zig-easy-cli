@@ -10,7 +10,6 @@ const Type = std.builtin.Type;
 const Struct = Type.Struct;
 // types
 const Allocator = std.mem.Allocator;
-// const ArgIterator = std.process.ArgIterator;
 const ArgIterator = anyopaque;
 const panic = std.debug.panic;
 
@@ -178,10 +177,12 @@ pub fn ensureStruct(comptime T: type) Struct {
     }
 }
 
-pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
+pub fn CliParser(spec: struct { opts: ?type = null, args: ?type = null }) type {
     return struct {
         context: CliContext,
         allocator: Allocator,
+        const OptionT = spec.opts orelse struct {};
+        const ArgT = spec.args orelse struct {};
 
         const Params = CliParams(OptionT, ArgT);
 
@@ -493,7 +494,7 @@ pub fn CliParser(comptime OptionT: type, comptime ArgT: type) type {
 pub const BuiltinOptions = struct {
     help: bool,
 };
-pub const BuiltinParser = CliParser(BuiltinOptions, NoArguments);
+pub const BuiltinParser = CliParser(.{ .options = BuiltinOptions });
 
 // Basic test case that only uses options and does not require casting
 test "parse with string parameters only" {
@@ -504,7 +505,7 @@ test "parse with string parameters only" {
     const Params = struct {
         arg_1: ?[]const u8,
     };
-    var parser = CliParser(Params, NoArguments){ .context = ctx, .allocator = allocator };
+    var parser = CliParser(.{ .opts = Params }){ .context = ctx, .allocator = allocator };
     const params = try parser.parse(&arguments);
     try std.testing.expectEqualStrings("Argument1", params.options.arg_1.?);
 }
@@ -517,7 +518,7 @@ test "parse single argument" {
     const Params = struct {
         arg_1: ?[]const u8 = null,
     };
-    var parser = CliParser(NoOptions, Params){ .context = ctx, .allocator = allocator };
+    var parser = CliParser(.{ .args = Params }){ .context = ctx, .allocator = allocator };
     const params = try parser.parse(&arguments);
     try std.testing.expectEqualStrings("Argument1", params.arguments.arg_1.?);
 }
@@ -531,7 +532,7 @@ test "parse many arguments" {
         arg_1: ?[]const u8 = null,
         arg_2: ?[]const u8 = null,
     };
-    var parser = CliParser(NoOptions, Params){ .context = ctx, .allocator = allocator };
+    var parser = CliParser(.{ .args = Params }){ .context = ctx, .allocator = allocator };
     const params = try parser.parse(&arguments);
     try std.testing.expectEqualStrings("Argument1", params.arguments.arg_1.?);
 }
@@ -544,7 +545,7 @@ test "parse integer argument" {
     const Params = struct {
         arg_1: i32,
     };
-    var parser = CliParser(NoOptions, Params){ .context = ctx, .allocator = allocator };
+    var parser = CliParser(.{ .args = Params }){ .context = ctx, .allocator = allocator };
     const params = try parser.parse(&arguments);
     try std.testing.expectEqual(42, params.arguments.arg_1);
 }
@@ -557,7 +558,7 @@ test "parse float argument" {
     const Params = struct {
         arg_1: f64,
     };
-    var parser = CliParser(NoOptions, Params){ .context = ctx, .allocator = allocator };
+    var parser = CliParser(.{ .args = Params }){ .context = ctx, .allocator = allocator };
     const params = try parser.parse(&arguments);
     try std.testing.expectEqual(3.14, params.arguments.arg_1);
 }
@@ -570,7 +571,7 @@ test "parse boolean flag" {
     const Options = struct {
         enable: bool,
     };
-    var parser = CliParser(Options, NoArguments){ .context = ctx, .allocator = allocator };
+    var parser = CliParser(.{ .opts = Options }){ .context = ctx, .allocator = allocator };
     const params = try parser.parse(&arguments);
     try std.testing.expect(params.options.enable);
 }
@@ -582,7 +583,7 @@ test "parse choices valid case" {
     const Options = struct {
         choice: Choices,
     };
-    var parser = CliParser(Options, NoArguments){ .context = ctx, .allocator = allocator };
+    var parser = CliParser(.{ .opts = Options }){ .context = ctx, .allocator = allocator };
 
     const test_cases: [3][]const u8 = .{
         "testcli --choice choice_a",
@@ -608,7 +609,7 @@ test "parse choices invalid case" {
     const Options = struct {
         choice: Choices,
     };
-    var parser = CliParser(Options, NoArguments){
+    var parser = CliParser(.{ .opts = Options }){
         .context = ctx,
         .allocator = allocator,
     };
@@ -623,7 +624,7 @@ test "parse help" {
     const ctx = CliContext{};
 
     var arguments = std.mem.split(u8, prompt, " ");
-    var parser = CliParser(NoOptions, NoOptions){
+    var parser = CliParser(.{}){
         .context = ctx,
         .allocator = allocator,
     };
@@ -646,7 +647,7 @@ test "build short flag map" {
         abcfg: bool, // expects -abc
         cba: bool, // expects -c
     };
-    var parser = CliParser(TestOptions, NoOptions){
+    var parser = CliParser(.{ .opts = TestOptions }){
         .context = ctx,
         .allocator = allocator,
     };
