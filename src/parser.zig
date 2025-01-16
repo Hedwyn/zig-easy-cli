@@ -8,6 +8,7 @@ const File = std.fs.File;
 const Writer = File.Writer;
 const Type = std.builtin.Type;
 const Struct = Type.Struct;
+const StructField = Type.StructField;
 // types
 const Allocator = std.mem.Allocator;
 const ArgIterator = anyopaque;
@@ -32,6 +33,14 @@ pub fn getPathBasename(path: []const u8) []const u8 {
 pub const ArgInfo = struct {
     name: []const u8,
     help: ?[]const u8 = null,
+    default_value: ?*const anyopaque = null,
+};
+
+pub const ArgInternalInfo = struct {
+    name: []const u8,
+    help: ?[]const u8 = null,
+    default_value: ?*const anyopaque = null,
+    default_type: ?type = null,
 };
 
 pub const OptionInfo = struct {
@@ -39,7 +48,21 @@ pub const OptionInfo = struct {
     short_name: ?[]const u8 = null,
     internal_name: ?[]const u8 = null,
     help: ?[]const u8 = null,
+    default_value: ?*const anyopaque = null,
 };
+
+pub const OptionInternalInfo = struct {
+    name: []const u8,
+    short_name: ?[]const u8 = null,
+    internal_name: ?[]const u8 = null,
+    help: ?[]const u8 = null,
+    default_value: ?*const anyopaque = null,
+    default_type: type,
+};
+
+pub fn castDefaultValue(comptime T: type, default_value: *const anyopaque) T {
+    return @as(*T, @ptrCast(@constCast((@alignCast(default_value))))).*;
+}
 
 pub const CliContext = struct {
     name: ?[]const u8 = null,
@@ -82,6 +105,8 @@ pub const CliError = error{
     IncorrectArgumentType,
     InvalidChoice,
     InvalidBooleanValue,
+    DuplicatedOptionName,
+    DuplicatedFlag,
 };
 
 // ShortFlag are passed with `-', LongFlag with '--',
@@ -177,7 +202,132 @@ pub fn ensureStruct(comptime T: type) Struct {
     }
 }
 
-pub fn CliParser(spec: struct { opts: ?type = null, args: ?type = null }) type {
+pub fn fillOptionsInfo(
+    comptime options: Struct,
+    comptime options_info: []const OptionInfo,
+) std.StaticStringMap(OptionInfo) {
+    var final_options: [options.fields.len]OptionInfo = undefined;
+    for (0.., options.fields) |i, field| {
+        var option: OptionInfo = blk: {
+            for (options_info) |opt| {
+                if (opt.name == field.name) {
+                    break :blk opt;
+                }
+            }
+            break :blk .{};
+        };
+        defer final_options[i] = option;
+        option.name = field.name;
+    }
+}
+
+pub inline fn getOptionInfo(opt_name: []const u8, options_info: []const OptionInfo) ?OptionInfo {
+    inline for (options_info) |opt| {
+        if (std.mem.eql(u8, options_info.name, opt_name)) {
+            return opt;
+        }
+    }
+    return null;
+}
+
+/// Keu-value pairs types for short flag maps
+const _KVType = struct { []const u8, []const u8 };
+
+pub fn _buildShortFlagMap(
+    comptime struct_fields: []const StructField,
+    comptime options_info: []const OptionInfo,
+) CliError![struct_fields.len]_KVType {
+    var kv_pairs: [struct_fields.len]_KVType = undefined;
+    var kv_len: usize = 0;
+
+    // pre-filling with the short flags that are set explicitly
+    for (options_info) |opt| {
+        if (opt.short_name) |flag| {
+            kv_pairs[kv_len].@"0" = flag;
+            kv_pairs[kv_len].@"1" = opt.short_name;
+            kv_len += 1;
+        }
+    }
+
+    inline for (struct_fields) |field| {
+        var slice_index: usize = 1;
+        const option_info = getOptionInfo(field.name, options_info);
+        // Checking if the short flag has been explcitly set
+        const explicit_short_flag = if (option_info) |opt| opt.short_flag else null;
+        // else starting from the first letter of the name
+        var short_flag: []const u8 = explicit_short_flag orelse field.name[0..1];
+        var is_unique = false;
+        while (!is_unique) {
+            // checking if that short flag is unique
+            for (kv_pairs[0..kv_len]) |kv| {
+                if (std.mem.eql(u8, kv.@"0", short_flag)) {
+                    // flag already exists
+                    break;
+                }
+            } else {
+                is_unique = true;
+                break;
+            }
+            // if not unique, taking on more letter of the name
+            if (explicit_short_flag) |_| {
+                return CliError.DuplicatedFlag;
+            }
+            slice_index += 1;
+            if (slice_index == field.name.len) {
+                return CliError.DuplicatedOptionName;
+            }
+            short_flag = field.name[0..slice_index];
+        }
+        kv_pairs[kv_len].@"0" = short_flag;
+        kv_pairs[kv_len].@"1" = field.name;
+        kv_len += 1;
+    }
+    return kv_pairs;
+}
+
+pub fn buildShortFlagMap(
+    comptime struct_fields: []const StructField,
+    comptime options_info: []const OptionInfo,
+    comptime reverse: bool,
+) CliError!std.StaticStringMap([]const u8) {
+    const kv_pairs = comptime try _buildShortFlagMap(struct_fields, options_info);
+    if (!reverse) {
+        return std.StaticStringMap([]const u8).initComptime(kv_pairs);
+    }
+    var reversed_kv_pairs: [kv_pairs.len]_KVType = undefined;
+    for (0.., kv_pairs) |i, kv| {
+        reversed_kv_pairs[i].@"0" = kv.@"1";
+        reversed_kv_pairs[i].@"1" = kv.@"0";
+    }
+    return std.StaticStringMap([]const u8).initComptime(reversed_kv_pairs);
+}
+
+pub fn parseOptionInfo(
+    comptime option_fields: []const StructField,
+    comptime options_info: []const OptionInfo,
+) CliError![option_fields.len]OptionInternalInfo {
+    var out: [option_fields.len]OptionInternalInfo = undefined;
+    const flag_map = try buildShortFlagMap(option_fields, options_info, true);
+    for (0.., option_fields) |i, field| {
+        var internal_opt = OptionInternalInfo{ .name = field.name, .default_type = field.type };
+        if (getOptionInfo(field.name, options_info)) |info| {
+            internal_opt.help = info.help;
+        }
+        internal_opt.short_name = flag_map.get(field.name).?;
+        internal_opt.default_value = field.default_value;
+        out[i] = internal_opt;
+    }
+    return out;
+}
+
+// pub fn showDefaults(comptime T: type, writer: RichWriter, default: anyopaque) void {}
+
+pub fn CliParser(comptime spec: struct {
+    opts: ?type = null,
+    args: ?type = null,
+    opts_info: []const OptionInfo = &.{},
+    args_info: []const ArgInfo = &.{},
+}) type {
     return struct {
         context: CliContext,
         allocator: Allocator,
@@ -656,4 +806,34 @@ test "build short flag map" {
     try std.testing.expectEqualStrings("ab", short_flag_map.get("abd").?.short_name.?);
     try std.testing.expectEqualStrings("abc", short_flag_map.get("abcfg").?.short_name.?);
     try std.testing.expectEqualStrings("c", short_flag_map.get("cba").?.short_name.?);
+}
+
+test "short flag map" {
+    const TestOptions = struct {
+        abcde: bool, // expects -a
+        abd: bool, // expects -ab
+        abcfg: bool, // expects -abc
+        cba: bool, // expects -c
+    };
+    const OptionsStruct = ensureStruct(TestOptions);
+    const short_flag_map = try buildShortFlagMap(OptionsStruct.fields, &.{}, false);
+    try std.testing.expectEqualStrings("abcde", short_flag_map.get("a").?);
+    try std.testing.expectEqualStrings("abd", short_flag_map.get("ab").?);
+    try std.testing.expectEqualStrings("abcfg", short_flag_map.get("abc").?);
+    try std.testing.expectEqualStrings("cba", short_flag_map.get("c").?);
+}
+
+test "parse option defaults" {
+    const TestOptions = struct {
+        abcde: u32 = 42, // expects -a
+        abd: bool, // expects -ab
+        abcfg: f32, // expects -abc
+        cba: []const u8 = "Hello", // expects -c
+    };
+    const OptionsStruct = ensureStruct(TestOptions);
+    const options_info = comptime try parseOptionInfo(OptionsStruct.fields, &.{});
+    const field_0 = options_info[0];
+    try std.testing.expectEqual(u32, field_0.default_type);
+    const default = castDefaultValue(field_0.default_type, field_0.default_value.?);
+    try std.testing.expectEqual(42, default);
 }
