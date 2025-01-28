@@ -30,17 +30,17 @@ pub fn getPathBasename(path: []const u8) []const u8 {
     return basename;
 }
 
+/// Documentation for an argument identified by `name`
+/// as given by the application designer
 pub const ArgInfo = struct {
     name: []const u8,
     help: ?[]const u8 = null,
-    default_value: ?*const anyopaque = null,
 };
 
 pub const ArgInternalInfo = struct {
     name: []const u8,
     help: ?[]const u8 = null,
-    default_value: ?*const anyopaque = null,
-    default_type: ?type = null,
+    default_value: ?[]const u8 = null,
 };
 
 pub const OptionInfo = struct {
@@ -48,46 +48,19 @@ pub const OptionInfo = struct {
     short_name: ?[]const u8 = null,
     internal_name: ?[]const u8 = null,
     help: ?[]const u8 = null,
-    default_value: ?*const anyopaque = null,
 };
 
 pub const OptionInternalInfo = struct {
     name: []const u8,
-    short_name: ?[]const u8 = null,
-    internal_name: ?[]const u8 = null,
+    short_name: []const u8 = undefined,
+    internal_name: ?[]const u8 = undefined,
     help: ?[]const u8 = null,
-    default_value: ?*const anyopaque = null,
-    default_type: type,
+    default_value: ?[]const u8 = null,
 };
 
-pub fn castDefaultValue(comptime T: type, default_value: *const anyopaque) T {
+pub fn castDefaultValue(comptime T: type, comptime default_value: *const anyopaque) T {
     return @as(*T, @ptrCast(@constCast((@alignCast(default_value))))).*;
 }
-
-pub const CliContext = struct {
-    name: ?[]const u8 = null,
-    comptime welcome_msg: ?[]const u8 = null,
-    options_info: []const OptionInfo = &.{},
-    arg_info: []const ArgInfo = &.{},
-
-    pub fn getOptionInfo(self: CliContext, option_name: []const u8) ?OptionInfo {
-        for (self.options_info) |opt| {
-            if (std.mem.eql(u8, opt.name, option_name)) {
-                return opt;
-            }
-        }
-        return null;
-    }
-
-    pub fn getArgInfo(self: CliContext, arg_name: []const u8) ?ArgInfo {
-        for (self.arg_info) |arg| {
-            if (std.mem.eql(u8, arg.name, arg_name)) {
-                return arg;
-            }
-        }
-        return null;
-    }
-};
 
 pub const CliError = error{
     MissingArgument,
@@ -116,9 +89,8 @@ const FlagType = enum {
     LongFlag,
 };
 
-pub const NoArguments = struct {};
-pub const NoOptions = struct {};
-
+/// Formats the help hint for a set of choices given by enum fields
+/// The choices are separated with '|'
 pub fn formatChoices(fields: []const Type.EnumField) []const u8 {
     var choices: []const u8 = "";
     inline for (fields) |field| {
@@ -127,6 +99,8 @@ pub fn formatChoices(fields: []const Type.EnumField) []const u8 {
     return choices;
 }
 
+/// Returns a friendely name for a given type `T`
+/// which can be displayed as hint for the CLI user
 pub fn getTypeName(comptime T: type) []const u8 {
     if (T == []const u8) {
         return "text";
@@ -142,6 +116,64 @@ pub fn getTypeName(comptime T: type) []const u8 {
     return type_description;
 }
 
+test "get type name on enum" {
+    const TestEnum = enum { ChoiceA, ChoiceB, ChoiceC };
+    try std.testing.expectEqualStrings("ChoiceA|ChoiceB|ChoiceC", getTypeName(TestEnum));
+}
+
+/// Returns the format-string to use to print that type
+pub fn formatDefaultValue(comptime T: type, comptime default_value: *const anyopaque) []const u8 {
+    const default = comptime castDefaultValue(T, default_value);
+    if (T == []const u8) {
+        return default;
+    }
+    const format = comptime switch (@typeInfo(T)) {
+        .Int, .Float => "{d}",
+        // .Enum => |choices| formatChoices(choices.fields), //TODO fix
+        .Enum => |e| {
+            for (e.fields) |field| {
+                if (@as(T, @enumFromInt(field.value)) == default) {
+                    return field.name;
+                }
+                @compileError("Internal error: failed to find default for enum");
+            }
+        },
+        .Optional => {
+            if (default != null) {
+                @compileError(
+                    \\Optional fields are only allowed to have null as default value, 
+                    \\ as default values other than null will never be applied
+                );
+            }
+            return "none";
+        },
+        else => "{}",
+    };
+    return std.fmt.comptimePrint(format, .{default});
+}
+
+test "format default string values" {
+    const Options = struct { name: []const u8 = "Bob" };
+    // const options: Options = comptime .{};
+    const option_field = std.meta.fields(Options)[0];
+    const default_name = formatDefaultValue(option_field.type, option_field.default_value.?);
+    try std.testing.expectEqualStrings("Bob", default_name);
+}
+
+test "format default non-string values" {
+    const Options = struct { age: i32 = 42, height: f32 = 1.77, is_employee: bool = false };
+    // const options: Options = comptime .{};
+    const fields = std.meta.fields(Options);
+
+    const default_age = formatDefaultValue(fields[0].type, fields[0].default_value.?);
+    const default_height = formatDefaultValue(fields[1].type, fields[1].default_value.?);
+    const default_is_employee = formatDefaultValue(fields[2].type, fields[2].default_value.?);
+
+    try std.testing.expectEqualStrings("42", default_age);
+    try std.testing.expectEqualStrings("1.77", default_height);
+    try std.testing.expectEqualStrings("false", default_is_employee);
+}
+
 /// Init all optional fields to null in a struct
 fn initOptionals(comptime T: type, container: *T) void {
     inline for (std.meta.fields(T)) |field| {
@@ -152,6 +184,7 @@ fn initOptionals(comptime T: type, container: *T) void {
     }
 }
 
+/// Converts a string value to the type `T`
 fn autoCast(comptime T: type, value_str: []const u8) CliError!T {
     if (T == []const u8 or T == ?[]const u8) {
         return value_str;
@@ -186,19 +219,15 @@ fn autoCast(comptime T: type, value_str: []const u8) CliError!T {
     };
 }
 
-pub fn CliParams(comptime OptionT: type, comptime ArgT: type) type {
-    return struct {
-        arguments: *ArgT,
-        options: *OptionT,
-        builtin: *BuiltinOptions,
-    };
-}
-
-///! Asserts that type is a struct and returns its Struct variant.
+/// Helper function making sure that the given is a struct
+/// and returning its Struct variant.
+/// Raises a compile time error with an appropriate message if not
 pub fn ensureStruct(comptime T: type) Struct {
     switch (@typeInfo(T)) {
         .Struct => |s| return s,
-        else => std.debug.panic("Type {} should be a struct", .{T}),
+        else => @compileError(
+            std.fmt.comptimePrint("{} should be a defined as a struct", .{T}),
+        ),
     }
 }
 
@@ -220,17 +249,26 @@ pub fn fillOptionsInfo(
         option.name = field.name;
     }
 }
-
+/// Extracts the option identified by `opt_name` from the list of options `options_info`
 pub inline fn getOptionInfo(opt_name: []const u8, options_info: []const OptionInfo) ?OptionInfo {
     inline for (options_info) |opt| {
-        if (std.mem.eql(u8, options_info.name, opt_name)) {
+        if (std.mem.eql(u8, opt.name, opt_name)) {
             return opt;
         }
     }
     return null;
 }
+/// Extracts the option identified by `arg_name` from the list of options `args_info`
+pub inline fn getArgInfo(arg_name: []const u8, args_info: []const ArgInfo) ?ArgInfo {
+    inline for (args_info) |arg| {
+        if (std.mem.eql(u8, arg.name, arg_name)) {
+            return arg;
+        }
+    }
+    return null;
+}
 
-/// Keu-value pairs types for short flag maps
+/// Key-value pairs types for short flag maps
 const _KVType = struct { []const u8, []const u8 };
 
 pub fn _buildShortFlagMap(
@@ -253,7 +291,7 @@ pub fn _buildShortFlagMap(
         var slice_index: usize = 1;
         const option_info = getOptionInfo(field.name, options_info);
         // Checking if the short flag has been explcitly set
-        const explicit_short_flag = if (option_info) |opt| opt.short_flag else null;
+        const explicit_short_flag = if (option_info) |opt| opt.short_name else null;
         // else starting from the first letter of the name
         var short_flag: []const u8 = explicit_short_flag orelse field.name[0..1];
         var is_unique = false;
@@ -285,6 +323,15 @@ pub fn _buildShortFlagMap(
     return kv_pairs;
 }
 
+/// Parses the options documentation and the option struct fields definition,
+/// and builds a hashmap associating each parameter name to its short flag
+/// if an explicit flag was passed by in the option doc, ensures uniqueness of that flag
+/// and uses it as such
+/// If not, finds the shortest flag that can be used without duplication.
+/// In that case, options defined first will get the shortest flag
+/// (e.g.) if you have options `port` and `platform`,
+/// if port is defined before platform it will flag `-p`
+/// while platform will get `-pl`
 pub fn buildShortFlagMap(
     comptime struct_fields: []const StructField,
     comptime options_info: []const OptionInfo,
@@ -302,6 +349,25 @@ pub fn buildShortFlagMap(
     return std.StaticStringMap([]const u8).initComptime(reversed_kv_pairs);
 }
 
+test "build short flag map" {
+    const TestOptions = struct {
+        abcde: bool, // expects -a
+        abd: bool, // expects -ab
+        abcfg: bool, // expects -abc
+        cba: bool, // expects -c
+    };
+    const OptionsStruct = ensureStruct(TestOptions);
+    const short_flag_map = try buildShortFlagMap(OptionsStruct.fields, &.{}, false);
+    try std.testing.expectEqualStrings("abcde", short_flag_map.get("a").?);
+    try std.testing.expectEqualStrings("abd", short_flag_map.get("ab").?);
+    try std.testing.expectEqualStrings("abcfg", short_flag_map.get("abc").?);
+    try std.testing.expectEqualStrings("cba", short_flag_map.get("c").?);
+}
+
+/// Given the documentation given by `options_info` and the fields
+/// of the struct used as container for options `options_fields`
+/// Infers the option information from the struct itself (e.g. default value)
+/// to build the internal information list
 pub fn parseOptionInfo(
     comptime option_fields: []const StructField,
     comptime options_info: []const OptionInfo,
@@ -309,40 +375,96 @@ pub fn parseOptionInfo(
     var out: [option_fields.len]OptionInternalInfo = undefined;
     const flag_map = try buildShortFlagMap(option_fields, options_info, true);
     for (0.., option_fields) |i, field| {
-        var internal_opt = OptionInternalInfo{ .name = field.name, .default_type = field.type };
+        const default_value = field.default_value orelse @compileError(
+            \\All options should have a default !
+        );
+        var internal_opt = OptionInternalInfo{
+            .name = field.name,
+            .default_value = formatDefaultValue(field.type, default_value),
+        };
         if (getOptionInfo(field.name, options_info)) |info| {
             internal_opt.help = info.help;
         }
         internal_opt.short_name = flag_map.get(field.name).?;
-        internal_opt.default_value = field.default_value;
         out[i] = internal_opt;
     }
     return out;
 }
 
+test "parse option defaults" {
+    const TestOptions = struct {
+        abcde: u32 = 42, // expects -a
+        abd: bool = false, // expects -ab
+        abcfg: f32 = 3.14, // expects -abc
+        cba: []const u8 = "Hello", // expects -c
+    };
+    const OptionsStruct = ensureStruct(TestOptions);
+    const options_info = comptime try parseOptionInfo(OptionsStruct.fields, &.{});
+    try std.testing.expectEqualStrings("42", options_info[0].default_value.?);
+    try std.testing.expectEqualStrings("false", options_info[1].default_value.?);
+    try std.testing.expectEqualStrings("3.14", options_info[2].default_value.?);
+    try std.testing.expectEqualStrings("Hello", options_info[3].default_value.?);
+}
+
+pub fn buildOptionInfoMap(
+    comptime option_fields: []const StructField,
+    comptime options_info: []const OptionInfo,
+) CliError!std.StaticStringMap(OptionInternalInfo) {
+    const options_parsed_info = try parseOptionInfo(option_fields, options_info);
+    var kv_pairs: [options_parsed_info.len]struct { []const u8, OptionInternalInfo } = undefined;
+    for (0.., options_parsed_info) |i, opt| {
+        kv_pairs[i].@"0" = opt.name;
+        kv_pairs[i].@"1" = opt;
+    }
+    return std.StaticStringMap(OptionInternalInfo).initComptime(kv_pairs);
+}
+
+test "option info map" {
+    const TestOptions = struct {
+        abcde: u32 = 42, // expects -a
+        abd: bool = false, // expects -ab
+        abcfg: f32 = 3.14, // expects -abc
+        cba: []const u8 = "Hello", // expects -c
+    };
+    const OptionsStruct = ensureStruct(TestOptions);
+    const options_info = comptime try buildOptionInfoMap(OptionsStruct.fields, &.{});
+
+    try std.testing.expectEqualStrings(options_info.get("abcde").?.short_name, "a");
+}
+
 // pub fn showDefaults(comptime T: type, writer: RichWriter, default: anyopaque) void {}
 
-pub fn CliParser(comptime spec: struct {
+const CliContext = struct {
     opts: ?type = null,
     args: ?type = null,
     opts_info: []const OptionInfo = &.{},
     args_info: []const ArgInfo = &.{},
-}) type {
+    name: ?[]const u8 = null,
+    comptime welcome_msg: ?[]const u8 = null,
+};
+
+/// A struct builder containing the parsed arguments passed by the user in command-line
+/// Provides standalone methods for running the parsing process
+/// `ctx` should provide all the information to layout the parser at comptime
+pub fn CliParser(comptime ctx: CliContext) type {
     return struct {
-        context: CliContext,
-        allocator: Allocator,
-        const OptionT = spec.opts orelse struct {};
-        const ArgT = spec.args orelse struct {};
-
-        const Params = CliParams(OptionT, ArgT);
-
+        const OptionT = ctx.opts orelse struct {};
+        const ArgT = ctx.args orelse struct {};
         const Self = @This();
+
+        args: ArgT,
+        options: OptionT,
+        builtin: BuiltinOptions,
 
         // Making sure that the types are structs and extracting
         // their meta struct
         const OptionSt = ensureStruct(OptionT);
         const ArgSt = ensureStruct(ArgT);
         const BuiltinSt = ensureStruct(BuiltinOptions);
+
+        const flag_to_name_map = buildShortFlagMap(OptionSt.fields, ctx.opts_info, true);
+        const name_to_flag_map = buildShortFlagMap(OptionSt.fields, ctx.opts_info, false);
+        const options_info_map = buildOptionInfoMap(OptionSt.fields, ctx.opts_info) catch unreachable;
 
         fn isFlag(arg_name: []const u8) CliError!bool {
             inline for ([_]Struct{ OptionSt, ArgSt, BuiltinSt }) |type_st| {
@@ -358,44 +480,14 @@ pub fn CliParser(comptime spec: struct {
             return CliError.UnknownArgument;
         }
 
-        pub fn buildShortFlagMap(self: Self, use_short_name: bool) std.StringHashMap(OptionInfo) {
-            var map = std.StringHashMap(OptionInfo).init(self.allocator);
-            var reversed_map = std.StringHashMap(OptionInfo).init(self.allocator);
-
-            inline for (OptionSt.fields) |field| {
-                var slice_index: usize = 1;
-                var slice = field.name[0..slice_index];
-                var short_flag: ?[]const u8 = null;
-                var option_info: ?OptionInfo = null;
-                // Checking if there's an entry in the documentation for this option
-                if (self.context.getOptionInfo(field.name)) |opt| {
-                    option_info = opt;
-                    short_flag = opt.short_name;
-                } else {
-                    option_info = OptionInfo{ .name = field.name };
-                }
-                if (short_flag == null) {
-                    // building flag
-                    while (reversed_map.contains(slice)) {
-                        slice_index += 1;
-                        slice = field.name[0..slice_index];
-                    }
-                    short_flag = slice;
-                    option_info.?.short_name = short_flag;
-                }
-                reversed_map.put(short_flag.?, option_info.?) catch unreachable;
-                map.put(field.name, option_info.?) catch unreachable;
-            }
-            return if (use_short_name) reversed_map else map;
-        }
-
         pub fn hasArguments() bool {
-            return ArgT != NoArguments;
+            return (ctx.args != null);
         }
 
         pub fn hasOptions() bool {
-            return OptionT != NoOptions;
+            return (ctx.opts != null);
         }
+
         pub fn setArgFromString(comptime T: type, arg_name: []const u8, arg_value: []const u8, container: *T) CliError!void {
             const struct_info = ensureStruct(T);
             inline for (struct_info.fields) |field| {
@@ -407,40 +499,40 @@ pub fn CliParser(comptime spec: struct {
             return CliError.UnknownOption;
         }
 
-        pub fn parseFlag(arg_name: []const u8, params: Params) CliError!void {
+        pub fn parseFlag(self: *Self, arg_name: []const u8) CliError!void {
             setArgFromString(
                 BuiltinOptions,
                 arg_name,
                 "true",
-                params.builtin,
+                &(self.builtin),
             ) catch {
                 try setArgFromString(
                     OptionT,
                     arg_name,
                     "true",
-                    params.options,
+                    &(self.options),
                 );
             };
         }
 
         pub fn parseArg(
+            self: *Self,
             arg_name: []const u8,
             arg_value: []const u8,
             is_option: bool,
-            params: Params,
         ) CliError!void {
             if (is_option) {
                 return setArgFromString(
                     BuiltinOptions,
                     arg_name,
                     arg_value,
-                    params.builtin,
+                    &(self.builtin),
                 ) catch {
                     try setArgFromString(
                         OptionT,
                         arg_name,
                         arg_value,
-                        params.options,
+                        &(self.options),
                     );
                 };
             }
@@ -448,11 +540,11 @@ pub fn CliParser(comptime spec: struct {
                 ArgT,
                 arg_name,
                 arg_value,
-                params.arguments,
+                &(self.args),
             );
         }
 
-        pub fn introspectArgName(_: Self, arg_idx: usize) CliError![]const u8 {
+        pub fn introspectArgName(arg_idx: usize) CliError![]const u8 {
             inline for (0.., ArgSt.fields) |i, field| {
                 if (i == arg_idx) {
                     return field.name;
@@ -461,21 +553,10 @@ pub fn CliParser(comptime spec: struct {
             return CliError.TooManyArguments;
         }
 
-        pub fn parse(self: *Self, arg_it: anytype) CliError!Params {
-            const options: *OptionT = self.allocator.create(OptionT) catch return CliError.MemoryError;
-            const arguments: *ArgT = self.allocator.create(ArgT) catch return CliError.MemoryError;
-            const builtin_options = self.allocator.create(BuiltinOptions) catch return CliError.MemoryError;
-
-            var option_info_map = self.buildShortFlagMap(true);
-            defer option_info_map.deinit();
-            initOptionals(OptionT, options);
-            initOptionals(ArgT, arguments);
-
-            const params = Params{
-                .options = options,
-                .arguments = arguments,
-                .builtin = builtin_options,
-            };
+        pub fn parse(arg_it: anytype) CliError!Self {
+            var params: Self = undefined;
+            initOptionals(OptionT, &(params.options));
+            initOptionals(ArgT, &(params.args));
 
             var is_option: bool = false;
             var flag_type: ?FlagType = null;
@@ -484,7 +565,7 @@ pub fn CliParser(comptime spec: struct {
 
             // If no explicit client name was passed,using process name
             const process_name: []const u8 = arg_it.next() orelse return CliError.EmptyArguments;
-            self.context.name = self.context.name orelse getPathBasename(process_name);
+            params.builtin.cli_name = ctx.name orelse getPathBasename(process_name);
             var next_arg = arg_it.next();
             var consume = true;
 
@@ -495,11 +576,10 @@ pub fn CliParser(comptime spec: struct {
                 if (flag_type) |_| {
                     consume = true;
                     defer flag_type = null;
-                    try parseArg(
+                    try params.parseArg(
                         current_arg_name,
                         arg,
                         is_option,
-                        params,
                     );
 
                     continue;
@@ -521,22 +601,22 @@ pub fn CliParser(comptime spec: struct {
                     .Argument => {
                         if (!hasArguments()) continue;
                         is_option = false;
-                        current_arg_name = try self.introspectArgName(arg_idx);
+                        current_arg_name = try introspectArgName(arg_idx);
                         arg_idx += 1;
                         consume = false;
                     },
                     .ShortFlag => {
                         is_option = true;
-                        current_arg_name = if (option_info_map.get(arg[arg_name_start_idx..])) |opt| opt.name else return CliError.UnknownOption;
+                        current_arg_name = if (options_info_map.get(arg[arg_name_start_idx..])) |opt| opt.name else return CliError.UnknownOption;
                         if (try isFlag(current_arg_name)) {
-                            try parseFlag(current_arg_name, params);
+                            try params.parseFlag(current_arg_name);
                         }
                     },
                     else => {
                         is_option = true;
                         current_arg_name = arg[arg_name_start_idx..];
                         if (try isFlag(current_arg_name)) {
-                            try parseFlag(current_arg_name, params);
+                            try params.parseFlag(current_arg_name);
                         }
                     },
                 }
@@ -546,26 +626,25 @@ pub fn CliParser(comptime spec: struct {
 
         pub fn emitWelcomeMessage(self: Self, writer: *const Writer) !void {
             const rich = RichWriter{ .writer = writer };
-            if (self.context.name) |name| {
-                const welcome_msg = self.context.welcome_msg orelse default_welcome_message;
+            if (self.builtin.cli_name) |name| {
+                const welcome_msg = ctx.welcome_msg orelse default_welcome_message;
                 rich.richPrint(welcome_msg, Style.Header1, .{name});
                 rich.print("\n", .{});
                 return;
             }
-            @panic(
+            panic(
                 \\No client name given and the parser has not run,
                 \\ cannot format welcome message.
-            );
+            , .{});
         }
 
         pub fn emitHelp(self: Self, writer: *const Writer) !void {
             // TODO: divide this into smaller functions
-            var flag_map = self.buildShortFlagMap(false);
+            // var flag_map = self.buildShortFlagMap(false);
             const rich = RichWriter{ .writer = writer };
-            defer flag_map.deinit();
             rich.richPrint("===== Usage =====", .Header2, .{});
             // Showing typical usage
-            rich.richPrint(">>> {s}", .Field, .{self.context.name.?});
+            rich.richPrint(">>> {s}", .Field, .{self.builtin.cli_name.?});
             inline for (std.meta.fields(ArgT)) |field| {
                 rich.richPrint(" {{{s}}}  ", .Field, .{field.name});
             }
@@ -587,7 +666,7 @@ pub fn CliParser(comptime spec: struct {
                             getTypeName(field.type),
                         },
                     );
-                    if (self.context.getArgInfo(field.name)) |arg| {
+                    if (getArgInfo(field.name, ctx.args_info)) |arg| {
                         if (arg.help) |help| {
                             rich.print("    {s}\n", .{help});
                         }
@@ -602,20 +681,24 @@ pub fn CliParser(comptime spec: struct {
                     .{},
                 );
                 inline for (std.meta.fields(OptionT)) |field| {
+                    const opt_internal_info = options_info_map.get(field.name) orelse panic(
+                        "Internal error: option {s} internal info has not been extracted properly",
+                        .{field.name},
+                    );
                     rich.richPrint(
                         "-{s}, --{s}: {s}",
                         .Field,
                         .{
-                            flag_map.get(field.name).?.short_name.?,
-                            field.name,
+                            opt_internal_info.short_name,
+                            opt_internal_info.name,
                             getTypeName(field.type),
                         },
                     );
-                    if (field.default_value) |default| {
-                        rich.richPrint("    [default:{any}]", .Field, .{default});
+                    if (opt_internal_info.default_value) |default| {
+                        rich.richPrint("    [default:{s}]", .Field, .{default});
                     }
                     rich.write("\n");
-                    if (self.context.getOptionInfo(field.name)) |opt| {
+                    if (getOptionInfo(field.name, ctx.opts_info)) |opt| {
                         if (opt.help) |help| {
                             rich.print("    {s}\n", .{help});
                         }
@@ -624,16 +707,14 @@ pub fn CliParser(comptime spec: struct {
             }
         }
 
-        pub fn runStandalone(context: CliContext) !?Params {
-            const allocator = std.heap.page_allocator;
+        pub fn runStandalone() !?Self {
             var args_it = std.process.args();
             const writer = std.io.getStdOut().writer();
-            var parser = Self{ .context = context, .allocator = allocator };
-            const params = try parser.parse(&args_it);
-            std.debug.assert(parser.context.name != null);
-            try parser.emitWelcomeMessage(&writer);
+            const params = try Self.parse(&args_it);
+            std.debug.assert(params.builtin.cli_name != null);
+            try params.emitWelcomeMessage(&writer);
             if (params.builtin.help) {
-                try parser.emitHelp(&writer);
+                try params.emitHelp(&writer);
                 return null;
             }
             return params;
@@ -642,98 +723,80 @@ pub fn CliParser(comptime spec: struct {
 }
 
 pub const BuiltinOptions = struct {
-    help: bool,
+    help: bool = false,
+    cli_name: ?[]const u8 = null,
 };
-pub const BuiltinParser = CliParser(.{ .options = BuiltinOptions });
+// pub const BuiltinParser = CliParser(.{ .options = BuiltinOptions });
 
 // Basic test case that only uses options and does not require casting
 test "parse with string parameters only" {
     const prompt = "testcli --arg_1 Argument1";
     var arguments = std.mem.split(u8, prompt, " ");
-    const allocator = std.heap.page_allocator;
-    const ctx = CliContext{};
-    const Params = struct {
-        arg_1: ?[]const u8,
+    // const allocator = std.heap.page_allocator;
+    const Options = struct {
+        arg_1: ?[]const u8 = null,
     };
-    var parser = CliParser(.{ .opts = Params }){ .context = ctx, .allocator = allocator };
-    const params = try parser.parse(&arguments);
+    const params = try CliParser(.{ .opts = Options }).parse(&arguments);
     try std.testing.expectEqualStrings("Argument1", params.options.arg_1.?);
 }
 
 test "parse single argument" {
     const prompt = "testcli Argument1";
     var arguments = std.mem.split(u8, prompt, " ");
-    const allocator = std.heap.page_allocator;
-    const ctx = CliContext{};
-    const Params = struct {
-        arg_1: ?[]const u8 = null,
+    const Args = struct {
+        arg_1: ?[]const u8,
     };
-    var parser = CliParser(.{ .args = Params }){ .context = ctx, .allocator = allocator };
-    const params = try parser.parse(&arguments);
-    try std.testing.expectEqualStrings("Argument1", params.arguments.arg_1.?);
+    const params = try CliParser(.{ .args = Args }).parse(&arguments);
+    try std.testing.expectEqualStrings("Argument1", params.args.arg_1.?);
 }
 
 test "parse many arguments" {
     const prompt = "testcli Argument1 Argument2";
     var arguments = std.mem.split(u8, prompt, " ");
-    const allocator = std.heap.page_allocator;
-    const ctx = CliContext{};
-    const Params = struct {
+    const Args = struct {
         arg_1: ?[]const u8 = null,
         arg_2: ?[]const u8 = null,
     };
-    var parser = CliParser(.{ .args = Params }){ .context = ctx, .allocator = allocator };
-    const params = try parser.parse(&arguments);
-    try std.testing.expectEqualStrings("Argument1", params.arguments.arg_1.?);
+    const params = try CliParser(.{ .args = Args }).parse(&arguments);
+    try std.testing.expectEqualStrings("Argument1", params.args.arg_1.?);
+    try std.testing.expectEqualStrings("Argument2", params.args.arg_2.?);
 }
 
 test "parse integer argument" {
     const prompt = "testcli 42";
     var arguments = std.mem.split(u8, prompt, " ");
-    const allocator = std.heap.page_allocator;
-    const ctx = CliContext{};
-    const Params = struct {
+    const Args = struct {
         arg_1: i32,
     };
-    var parser = CliParser(.{ .args = Params }){ .context = ctx, .allocator = allocator };
-    const params = try parser.parse(&arguments);
-    try std.testing.expectEqual(42, params.arguments.arg_1);
+    const params = try CliParser(.{ .args = Args }).parse(&arguments);
+    try std.testing.expectEqual(42, params.args.arg_1);
 }
 
 test "parse float argument" {
     const prompt = "testcli 3.14";
     var arguments = std.mem.split(u8, prompt, " ");
-    const allocator = std.heap.page_allocator;
-    const ctx = CliContext{};
-    const Params = struct {
+    const Args = struct {
         arg_1: f64,
     };
-    var parser = CliParser(.{ .args = Params }){ .context = ctx, .allocator = allocator };
-    const params = try parser.parse(&arguments);
-    try std.testing.expectEqual(3.14, params.arguments.arg_1);
+    const params = try CliParser(.{ .args = Args }).parse(&arguments);
+    try std.testing.expectEqual(3.14, params.args.arg_1);
 }
 
 test "parse boolean flag" {
     const prompt = "testcli --enable";
     var arguments = std.mem.split(u8, prompt, " ");
-    const allocator = std.heap.page_allocator;
-    const ctx = CliContext{};
     const Options = struct {
-        enable: bool,
+        enable: bool = false,
     };
-    var parser = CliParser(.{ .opts = Options }){ .context = ctx, .allocator = allocator };
-    const params = try parser.parse(&arguments);
+    const params = try CliParser(.{ .opts = Options }).parse(&arguments);
     try std.testing.expect(params.options.enable);
 }
 
 test "parse choices valid case" {
-    const allocator = std.heap.page_allocator;
-    const ctx = CliContext{};
     const Choices = enum { choice_a, choice_b, choice_c };
     const Options = struct {
-        choice: Choices,
+        choice: Choices = Choices.choice_a,
     };
-    var parser = CliParser(.{ .opts = Options }){ .context = ctx, .allocator = allocator };
 
     const test_cases: [3][]const u8 = .{
         "testcli --choice choice_a",
@@ -747,93 +810,25 @@ test "parse choices valid case" {
     };
     for (0.., test_cases) |i, prompt| {
         var arguments = std.mem.split(u8, prompt, " ");
-        const params = try parser.parse(&arguments);
+        const params = try CliParser(.{ .opts = Options }).parse(&arguments);
         try std.testing.expectEqual(expected[i], params.options.choice);
     }
 }
 
 test "parse choices invalid case" {
-    const allocator = std.heap.page_allocator;
-    const ctx = CliContext{};
     const Choices = enum { choice_a, choice_b, choice_c };
     const Options = struct {
-        choice: Choices,
-    };
-    var parser = CliParser(.{ .opts = Options }){
-        .context = ctx,
-        .allocator = allocator,
+        choice: Choices = Choices.choice_a,
     };
     const prompt = "testcli --choice invalid";
     var arguments = std.mem.split(u8, prompt, " ");
-    try std.testing.expectEqual(parser.parse(&arguments), CliError.InvalidChoice);
+    try std.testing.expectEqual(CliParser(.{ .opts = Options }).parse(&arguments), CliError.InvalidChoice);
 }
 
 test "parse help" {
-    const allocator = std.heap.page_allocator;
     const prompt = "testcli --help";
-    const ctx = CliContext{};
-
     var arguments = std.mem.split(u8, prompt, " ");
-    var parser = CliParser(.{}){
-        .context = ctx,
-        .allocator = allocator,
-    };
-    const params = try parser.parse(&arguments);
+
+    const params = try CliParser(.{}).parse(&arguments);
     try std.testing.expect(params.builtin.help);
-}
-
-test "get type name on enum" {
-    const TestEnum = enum { ChoiceA, ChoiceB, ChoiceC };
-    try std.testing.expectEqualStrings("ChoiceA|ChoiceB|ChoiceC", getTypeName(TestEnum));
-}
-
-test "build short flag map" {
-    const allocator = std.heap.page_allocator;
-    const ctx = CliContext{};
-
-    const TestOptions = struct {
-        abcde: bool, // expects -a
-        abd: bool, // expects -ab
-        abcfg: bool, // expects -abc
-        cba: bool, // expects -c
-    };
-    var parser = CliParser(.{ .opts = TestOptions }){
-        .context = ctx,
-        .allocator = allocator,
-    };
-    const short_flag_map = parser.buildShortFlagMap(false);
-    try std.testing.expectEqualStrings("a", short_flag_map.get("abcde").?.short_name.?);
-    try std.testing.expectEqualStrings("ab", short_flag_map.get("abd").?.short_name.?);
-    try std.testing.expectEqualStrings("abc", short_flag_map.get("abcfg").?.short_name.?);
-    try std.testing.expectEqualStrings("c", short_flag_map.get("cba").?.short_name.?);
-}
-
-test "short flag map" {
-    const TestOptions = struct {
-        abcde: bool, // expects -a
-        abd: bool, // expects -ab
-        abcfg: bool, // expects -abc
-        cba: bool, // expects -c
-    };
-    const OptionsStruct = ensureStruct(TestOptions);
-    const short_flag_map = try buildShortFlagMap(OptionsStruct.fields, &.{}, false);
-    try std.testing.expectEqualStrings("abcde", short_flag_map.get("a").?);
-    try std.testing.expectEqualStrings("abd", short_flag_map.get("ab").?);
-    try std.testing.expectEqualStrings("abcfg", short_flag_map.get("abc").?);
-    try std.testing.expectEqualStrings("cba", short_flag_map.get("c").?);
-}
-
-test "parse option defaults" {
-    const TestOptions = struct {
-        abcde: u32 = 42, // expects -a
-        abd: bool, // expects -ab
-        abcfg: f32, // expects -abc
-        cba: []const u8 = "Hello", // expects -c
-    };
-    const OptionsStruct = ensureStruct(TestOptions);
-    const options_info = comptime try parseOptionInfo(OptionsStruct.fields, &.{});
-    const field_0 = options_info[0];
-    try std.testing.expectEqual(u32, field_0.default_type);
-    const default = castDefaultValue(field_0.default_type, field_0.default_value.?);
-    try std.testing.expectEqual(42, default);
 }

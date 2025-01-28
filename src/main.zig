@@ -6,7 +6,7 @@ const OptionInfo = easycli.OptionInfo;
 const ArgInfo = easycli.ArgInfo;
 
 const DemoOptions = struct {
-    surname: ?[]const u8,
+    surname: ?[]const u8 = null,
     grade: enum { Employee, Boss } = .Employee,
 };
 const DemoArgs = struct { name: ?[]const u8 };
@@ -19,12 +19,14 @@ const arg_doc = [_]ArgInfo{
     .{ .name = "name", .help = "Your name" },
 };
 pub fn main() !void {
-    const ParserT = easycli.CliParser(.{ .opts = DemoOptions, .args = DemoArgs });
-    const params = if (try ParserT.runStandalone(.{
-        .options_info = &options_doc,
-        .arg_info = &arg_doc,
-    })) |p| p else return;
-    const name = if (params.arguments.name) |n| n else {
+    const ParserT = easycli.CliParser(.{
+        .opts = DemoOptions,
+        .args = DemoArgs,
+        .opts_info = &options_doc,
+        .args_info = &arg_doc,
+    });
+    const params = if (try ParserT.runStandalone()) |p| p else return;
+    const name = if (params.args.name) |n| n else {
         std.debug.print("You need to pass your name !\n", .{});
         return;
     };
