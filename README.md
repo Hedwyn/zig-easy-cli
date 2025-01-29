@@ -10,32 +10,33 @@ The main features are:
 CLI applications typically supports two types of parameters: arguments (mandatory parameters that are passed in order), and options, typically identified by flags.
 To get a basic working cli, you only need to define one struct for you arguments (they will be parsed in declaration order) and on struct for your options (with the defaults that you want). Then, simply create an `easycli.CliParser` with your two structs and call `runStandalone()` method to parse the arguments:
 ```zig
+/// Small demo code
 const std = @import("std");
 const easycli = @import("parser.zig");
 
-// for enums (like 'grade' below), the variants wil be translated to choices
-// available to the user in the help menu
-const DemoOptions = struct { surname: ?[]const u8, grade: enum { Employee, Boss } };
+const DemoOptions = struct {
+    surname: ?[]const u8 = null,
+    grade: enum { Employee, Boss } = .Employee,
+};
 const DemoArgs = struct { name: ?[]const u8 };
 
 pub fn main() !void {
-    const ParserT = easycli.CliParser(DemoOptions, DemoArgs);
-    // runStandalone returns null when the user calls --help
-    // in that case you can simply return right away !
-    const params = if (try ParserT.run_standalone()) |p| p else return;
-
-    // If not querying help hint, you can now access you arguments !
-    const name = if (params.arguments.name) |n| n else {
+    const ParserT = easycli.CliParser(.{
+        .opts = DemoOptions,
+        .args = DemoArgs,
+    });
+    const params = if (try ParserT.runStandalone()) |p| p else return;
+    const name = if (params.args.name) |n| n else {
         std.debug.print("You need to pass your name !\n", .{});
         return;
     };
-
     if (params.options.surname) |surname| {
         std.debug.print("Hello {s} {s}!\n", .{ name, surname });
     } else {
         std.debug.print("Hello {s}!\n", .{name});
     }
 }
+
 ```
 
 This very basic version will already show the syntax, type and valid choices for your arguments and options. If you want to add documentation to your options or arguments, you can define some documentation structs as shown below:
@@ -47,7 +48,10 @@ const easycli = @import("parser.zig");
 const OptionInfo = easycli.OptionInfo;
 const ArgInfo = easycli.ArgInfo;
 
-const DemoOptions = struct { surname: ?[]const u8, grade: enum { Employee, Boss } };
+const DemoOptions = struct {
+    surname: ?[]const u8 = null,
+    grade: enum { Employee, Boss } = .Employee,
+};
 const DemoArgs = struct { name: ?[]const u8 };
 
 const options_doc = [_]OptionInfo{
@@ -58,12 +62,14 @@ const arg_doc = [_]ArgInfo{
     .{ .name = "name", .help = "Your name" },
 };
 pub fn main() !void {
-    const ParserT = easycli.CliParser(DemoOptions, DemoArgs);
-    const params = if (try ParserT.runStandalone(.{
-        .options_info = &options_doc,
-        .arg_info = &arg_doc,
-    })) |p| p else return;
-    const name = if (params.arguments.name) |n| n else {
+    const ParserT = easycli.CliParser(.{
+        .opts = DemoOptions,
+        .args = DemoArgs,
+        .opts_info = &options_doc,
+        .args_info = &arg_doc,
+    });
+    const params = if (try ParserT.runStandalone()) |p| p else return;
+    const name = if (params.args.name) |n| n else {
         std.debug.print("You need to pass your name !\n", .{});
         return;
     };
@@ -74,14 +80,24 @@ pub fn main() !void {
     }
 }
 
+
 ```
 
-You can run it with:
+You can run it as follows:
 ```zig
 zig build run -- 
 
->>> You need to pass your name !
+*******************************
+*                             *
+*  Welcome to zig-easy-cli !  *
+*                             *
+*******************************
 
+
+You need to pass your name !
+```
+
+```
 zig build run -- John
 
 >>> Hello John!
@@ -89,7 +105,10 @@ zig build run -- John
 zig build run -- John --surname Doe
 
 >>> Hello John Doe!
+```
 
+Help menu will be generated automatically by zig-easy-cli and can be summoned with `--help`:
+```
 zig build run -- --help
 
 *******************************
@@ -107,8 +126,8 @@ name: (Optional) text
     Your name
 
 ==== Options ====
--s, --surname: (Optional) text
+-s, --surname: (Optional) text    [default:none]
     Your surname
--g, --grade: Employee|Boss
+-g, --grade: Employee|Boss    [default:Employee]
 
 ```
