@@ -155,6 +155,7 @@ pub const Style = enum {
     Header2,
     Entry,
     Field,
+    Hint,
 
     pub fn lookupPalette(self: Style, palette: std.StaticStringMap(StyleOptions)) ?StyleOptions {
         inline for (std.meta.fields(Style)) |field| {
@@ -284,11 +285,16 @@ const clay_palette = std.StaticStringMap(StyleOptions).initComptime(.{
     .{ "Header2", .{ .text_color = .black, .bg_color = .yellow } },
     .{ "Entry", .{ .italic = true } },
     .{ "Field", .{ .italic = true, .line_breaks = 0 } },
+    .{ "Hint", .{ .bold = true, .line_breaks = 0 } },
 });
 const blueish_palette = std.StaticStringMap(StyleOptions).initComptime(.{
-    .{ "Header1", .{ .text_color = .cyan, .bg_color = .black, .bold = true, .framed = true } },
-    .{ "Header2", .{ .text_color = .cyan, .bg_color = .black } },
+    .{ "Header1", .{ .text_color = .cyan, .bg_color = .black, .framed = true } },
+    .{
+        "Header2",
+        .{ .text_color = .cyan, .bg_color = .black },
+    },
     .{ "Entry", .{ .italic = true } },
     .{ "Field", .{ .italic = true, .line_breaks = 0 } },
+    .{ "Hint", .{ .italic = true, .text_color = .cyan, .line_breaks = 0 } },
 });
 const default_palette = blueish_palette;

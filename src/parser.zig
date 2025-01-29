@@ -695,7 +695,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
                         },
                     );
                     if (opt_internal_info.default_value) |default| {
-                        rich.richPrint("    [default:{s}]", .Field, .{default});
+                        rich.richPrint("    [default:{s}]", .Hint, .{default});
                     }
                     rich.write("\n");
                     if (getOptionInfo(field.name, ctx.opts_info)) |opt| {
