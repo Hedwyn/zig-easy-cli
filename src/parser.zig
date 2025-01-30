@@ -62,25 +62,24 @@ pub fn castDefaultValue(comptime T: type, comptime default_value: *const anyopaq
     return @as(*T, @ptrCast(@constCast((@alignCast(default_value))))).*;
 }
 
-pub const CliError = error{
+pub const SyntaxError = error{
+    MaxTwoDashesAllowed,
+};
+
+pub const ParameterError = error{
     MissingArgument,
     InvalidOption,
-    InvalidCharacter,
-    MemoryError,
-    EmptyArguments,
-    MaxTwoDashesAllowed,
-    NotSupported,
-    InvalidContainer,
     UnknownOption,
     UnknownArgument,
     TooManyArguments,
-    TakesNoArgument,
     IncorrectArgumentType,
     InvalidChoice,
     InvalidBooleanValue,
     DuplicatedOptionName,
     DuplicatedFlag,
 };
+
+pub const CliError = SyntaxError || ParameterError;
 
 // ShortFlag are passed with `-', LongFlag with '--',
 const FlagType = enum {
@@ -184,6 +183,21 @@ fn initOptionals(comptime T: type, container: *T) void {
     }
 }
 
+/// Container for error information
+/// allows displaying an more detailed and contextualized error message
+/// to the final user
+pub const ParamErrPayload = struct {
+    value_str: ?[]const u8 = null,
+    field_name: ?[]const u8 = null,
+
+    pub fn get_field_name(self: ParamErrPayload) []const u8 {
+        return self.field_name orelse panic("Field name missing from context", .{});
+    }
+
+    pub fn get_value_str(self: ParamErrPayload) []const u8 {
+        return self.value_str orelse panic("Value string missing from context", .{});
+    }
+};
 /// Converts a string value to the type `T`
 fn autoCast(comptime T: type, value_str: []const u8) CliError!T {
     if (T == []const u8 or T == ?[]const u8) {
@@ -274,7 +288,7 @@ const _KVType = struct { []const u8, []const u8 };
 pub fn _buildShortFlagMap(
     comptime struct_fields: []const StructField,
     comptime options_info: []const OptionInfo,
-) CliError![struct_fields.len]_KVType {
+) [struct_fields.len]_KVType {
     var kv_pairs: [struct_fields.len]_KVType = undefined;
     var kv_len: usize = 0;
 
@@ -308,11 +322,11 @@ pub fn _buildShortFlagMap(
             }
             // if not unique, taking on more letter of the name
             if (explicit_short_flag) |_| {
-                return CliError.DuplicatedFlag;
+                @compileError("Duplicate flag found");
             }
             slice_index += 1;
             if (slice_index == field.name.len) {
-                return CliError.DuplicatedOptionName;
+                @compileError("Duplicate option name found");
             }
             short_flag = field.name[0..slice_index];
         }
@@ -336,8 +350,8 @@ pub fn buildShortFlagMap(
     comptime struct_fields: []const StructField,
     comptime options_info: []const OptionInfo,
     comptime reverse: bool,
-) CliError!std.StaticStringMap([]const u8) {
-    const kv_pairs = comptime try _buildShortFlagMap(struct_fields, options_info);
+) std.StaticStringMap([]const u8) {
+    const kv_pairs = comptime _buildShortFlagMap(struct_fields, options_info);
     if (!reverse) {
         return std.StaticStringMap([]const u8).initComptime(kv_pairs);
     }
@@ -357,7 +371,7 @@ test "build short flag map" {
         cba: bool, // expects -c
     };
     const OptionsStruct = ensureStruct(TestOptions);
-    const short_flag_map = try buildShortFlagMap(OptionsStruct.fields, &.{}, false);
+    const short_flag_map = buildShortFlagMap(OptionsStruct.fields, &.{}, false);
     try std.testing.expectEqualStrings("abcde", short_flag_map.get("a").?);
     try std.testing.expectEqualStrings("abd", short_flag_map.get("ab").?);
     try std.testing.expectEqualStrings("abcfg", short_flag_map.get("abc").?);
@@ -371,9 +385,9 @@ test "build short flag map" {
 pub fn parseOptionInfo(
     comptime option_fields: []const StructField,
     comptime options_info: []const OptionInfo,
-) CliError![option_fields.len]OptionInternalInfo {
+) [option_fields.len]OptionInternalInfo {
     var out: [option_fields.len]OptionInternalInfo = undefined;
-    const flag_map = try buildShortFlagMap(option_fields, options_info, true);
+    const flag_map = buildShortFlagMap(option_fields, options_info, true);
     for (0.., option_fields) |i, field| {
         const default_value = field.default_value orelse @compileError(
             \\All options should have a default !
@@ -399,7 +413,7 @@ test "parse option defaults" {
         cba: []const u8 = "Hello", // expects -c
     };
     const OptionsStruct = ensureStruct(TestOptions);
-    const options_info = comptime try parseOptionInfo(OptionsStruct.fields, &.{});
+    const options_info = comptime parseOptionInfo(OptionsStruct.fields, &.{});
     try std.testing.expectEqualStrings("42", options_info[0].default_value.?);
     try std.testing.expectEqualStrings("false", options_info[1].default_value.?);
     try std.testing.expectEqualStrings("3.14", options_info[2].default_value.?);
@@ -409,8 +423,8 @@ test "parse option defaults" {
 pub fn buildOptionInfoMap(
     comptime option_fields: []const StructField,
     comptime options_info: []const OptionInfo,
-) CliError!std.StaticStringMap(OptionInternalInfo) {
-    const options_parsed_info = try parseOptionInfo(option_fields, options_info);
+) std.StaticStringMap(OptionInternalInfo) {
+    const options_parsed_info = parseOptionInfo(option_fields, options_info);
     var kv_pairs: [options_parsed_info.len]struct { []const u8, OptionInternalInfo } = undefined;
     for (0.., options_parsed_info) |i, opt| {
         kv_pairs[i].@"0" = opt.name;
@@ -427,13 +441,15 @@ test "option info map" {
         cba: []const u8 = "Hello", // expects -c
     };
     const OptionsStruct = ensureStruct(TestOptions);
-    const options_info = comptime try buildOptionInfoMap(OptionsStruct.fields, &.{});
+    const options_info = comptime buildOptionInfoMap(OptionsStruct.fields, &.{});
 
     try std.testing.expectEqualStrings(options_info.get("abcde").?.short_name, "a");
 }
 
-// pub fn showDefaults(comptime T: type, writer: RichWriter, default: anyopaque) void {}
-
+/// The comptime context for the parser:
+/// * Which arguments and options to parse
+/// * The (optional) documentation for these
+/// * The name of the client, etc.
 const CliContext = struct {
     opts: ?type = null,
     args: ?type = null,
@@ -464,8 +480,9 @@ pub fn CliParser(comptime ctx: CliContext) type {
 
         const flag_to_name_map = buildShortFlagMap(OptionSt.fields, ctx.opts_info, true);
         const name_to_flag_map = buildShortFlagMap(OptionSt.fields, ctx.opts_info, false);
-        const options_info_map = buildOptionInfoMap(OptionSt.fields, ctx.opts_info) catch unreachable;
+        const options_info_map = buildOptionInfoMap(OptionSt.fields, ctx.opts_info);
 
+        /// Checks if the given argument is a boolean flag
         fn isFlag(arg_name: []const u8) CliError!bool {
             inline for ([_]Struct{ OptionSt, ArgSt, BuiltinSt }) |type_st| {
                 inline for (type_st.fields) |field| {
@@ -553,7 +570,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
             return CliError.TooManyArguments;
         }
 
-        pub fn parse(arg_it: anytype) CliError!Self {
+        pub fn parse(arg_it: anytype, error_payload: ?*ParamErrPayload) CliError!Self {
             var params: Self = undefined;
             initOptionals(OptionT, &(params.options));
             initOptionals(ArgT, &(params.args));
@@ -564,7 +581,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
             var arg_idx: usize = 0;
 
             // If no explicit client name was passed,using process name
-            const process_name: []const u8 = arg_it.next() orelse return CliError.EmptyArguments;
+            const process_name: []const u8 = arg_it.next() orelse panic("Process name is missing from arguments", .{});
             params.builtin.cli_name = ctx.name orelse getPathBasename(process_name);
             var next_arg = arg_it.next();
             var consume = true;
@@ -576,11 +593,17 @@ pub fn CliParser(comptime ctx: CliContext) type {
                 if (flag_type) |_| {
                     consume = true;
                     defer flag_type = null;
-                    try params.parseArg(
+                    params.parseArg(
                         current_arg_name,
                         arg,
                         is_option,
-                    );
+                    ) catch |e| {
+                        if (error_payload) |p| {
+                            p.value_str = arg;
+                            p.field_name = current_arg_name;
+                        }
+                        return e;
+                    };
 
                     continue;
                 }
@@ -608,14 +631,14 @@ pub fn CliParser(comptime ctx: CliContext) type {
                     .ShortFlag => {
                         is_option = true;
                         current_arg_name = if (options_info_map.get(arg[arg_name_start_idx..])) |opt| opt.name else return CliError.UnknownOption;
-                        if (try isFlag(current_arg_name)) {
+                        if (isFlag(current_arg_name) catch unreachable) {
                             try params.parseFlag(current_arg_name);
                         }
                     },
                     else => {
                         is_option = true;
                         current_arg_name = arg[arg_name_start_idx..];
-                        if (try isFlag(current_arg_name)) {
+                        if (isFlag(current_arg_name) catch unreachable) {
                             try params.parseFlag(current_arg_name);
                         }
                     },
@@ -709,8 +732,12 @@ pub fn CliParser(comptime ctx: CliContext) type {
 
         pub fn runStandalone() !?Self {
             var args_it = std.process.args();
+            var err_payload: ParamErrPayload = .{};
             const writer = std.io.getStdOut().writer();
-            const params = try Self.parse(&args_it);
+            const params = Self.parse(&args_it, &err_payload) catch |e| {
+                displayError(e, err_payload, &writer);
+                return null;
+            };
             std.debug.assert(params.builtin.cli_name != null);
             try params.emitWelcomeMessage(&writer);
             if (params.builtin.help) {
@@ -718,6 +745,26 @@ pub fn CliParser(comptime ctx: CliContext) type {
                 return null;
             }
             return params;
+        }
+
+        /// Shows an error to the end user
+        pub fn displayError(err: CliError, err_payload: ParamErrPayload, writer: *const Writer) void {
+            const rich = RichWriter{ .writer = writer };
+            switch (err) {
+                ParameterError.MissingArgument => {
+                    const param_name = err_payload.get_field_name();
+                    rich.richPrint("Argument `{s}` is mandatory", .Error, .{param_name});
+                },
+                ParameterError.UnknownOption => {
+                    const param_name = err_payload.get_field_name();
+                    rich.richPrint("Option `{s}` is unknown", .Error, .{param_name});
+                },
+                ParameterError.InvalidChoice => {
+                    const param_name = err_payload.get_field_name();
+                    rich.richPrint("Option `{s}` is invalid", .Error, .{param_name});
+                },
+                else => rich.richPrint("Usage error: {}", .Error, .{err}),
+            }
         }
     };
 }
@@ -732,11 +779,10 @@ pub const BuiltinOptions = struct {
 test "parse with string parameters only" {
     const prompt = "testcli --arg_1 Argument1";
     var arguments = std.mem.split(u8, prompt, " ");
-    // const allocator = std.heap.page_allocator;
     const Options = struct {
         arg_1: ?[]const u8 = null,
     };
-    const params = try CliParser(.{ .opts = Options }).parse(&arguments);
+    const params = try CliParser(.{ .opts = Options }).parse(&arguments, null);
     try std.testing.expectEqualStrings("Argument1", params.options.arg_1.?);
 }
 
@@ -746,7 +792,7 @@ test "parse single argument" {
     const Args = struct {
         arg_1: ?[]const u8,
     };
-    const params = try CliParser(.{ .args = Args }).parse(&arguments);
+    const params = try CliParser(.{ .args = Args }).parse(&arguments, null);
     try std.testing.expectEqualStrings("Argument1", params.args.arg_1.?);
 }
 
@@ -757,7 +803,7 @@ test "parse many arguments" {
         arg_1: ?[]const u8 = null,
         arg_2: ?[]const u8 = null,
     };
-    const params = try CliParser(.{ .args = Args }).parse(&arguments);
+    const params = try CliParser(.{ .args = Args }).parse(&arguments, null);
     try std.testing.expectEqualStrings("Argument1", params.args.arg_1.?);
     try std.testing.expectEqualStrings("Argument2", params.args.arg_2.?);
 }
@@ -768,7 +814,7 @@ test "parse integer argument" {
     const Args = struct {
         arg_1: i32,
     };
-    const params = try CliParser(.{ .args = Args }).parse(&arguments);
+    const params = try CliParser(.{ .args = Args }).parse(&arguments, null);
     try std.testing.expectEqual(42, params.args.arg_1);
 }
 
@@ -778,7 +824,7 @@ test "parse float argument" {
     const Args = struct {
         arg_1: f64,
     };
-    const params = try CliParser(.{ .args = Args }).parse(&arguments);
+    const params = try CliParser(.{ .args = Args }).parse(&arguments, null);
     try std.testing.expectEqual(3.14, params.args.arg_1);
 }
 
@@ -788,7 +834,7 @@ test "parse boolean flag" {
     const Options = struct {
         enable: bool = false,
     };
-    const params = try CliParser(.{ .opts = Options }).parse(&arguments);
+    const params = try CliParser(.{ .opts = Options }).parse(&arguments, null);
     try std.testing.expect(params.options.enable);
 }
 
@@ -810,7 +856,7 @@ test "parse choices valid case" {
     };
     for (0.., test_cases) |i, prompt| {
         var arguments = std.mem.split(u8, prompt, " ");
-        const params = try CliParser(.{ .opts = Options }).parse(&arguments);
+        const params = try CliParser(.{ .opts = Options }).parse(&arguments, null);
         try std.testing.expectEqual(expected[i], params.options.choice);
     }
 }
@@ -822,13 +868,12 @@ test "parse choices invalid case" {
     };
     const prompt = "testcli --choice invalid";
     var arguments = std.mem.split(u8, prompt, " ");
-    try std.testing.expectEqual(CliParser(.{ .opts = Options }).parse(&arguments), CliError.InvalidChoice);
+    try std.testing.expectEqual(CliParser(.{ .opts = Options }).parse(&arguments, null), CliError.InvalidChoice);
 }
 
 test "parse help" {
     const prompt = "testcli --help";
     var arguments = std.mem.split(u8, prompt, " ");
-
-    const params = try CliParser(.{}).parse(&arguments);
+    const params = try CliParser(.{}).parse(&arguments, null);
     try std.testing.expect(params.builtin.help);
 }

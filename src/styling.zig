@@ -156,6 +156,7 @@ pub const Style = enum {
     Entry,
     Field,
     Hint,
+    Error,
 
     pub fn lookupPalette(self: Style, palette: std.StaticStringMap(StyleOptions)) ?StyleOptions {
         inline for (std.meta.fields(Style)) |field| {
@@ -223,7 +224,7 @@ pub const RichWriter = struct {
         if (style.lookupPalette(default_palette)) |options| {
             self.styledPrint(format, options, args);
         } else {
-            panic("Not supported {any}", .{style});
+            panic("Style variant not declared in Palette: {any}", .{style});
         }
     }
 };
@@ -286,6 +287,7 @@ const clay_palette = std.StaticStringMap(StyleOptions).initComptime(.{
     .{ "Entry", .{ .italic = true } },
     .{ "Field", .{ .italic = true, .line_breaks = 0 } },
     .{ "Hint", .{ .bold = true, .line_breaks = 0 } },
+    .{ "Error", .{ .text_color = .red, .bold = true } },
 });
 const blueish_palette = std.StaticStringMap(StyleOptions).initComptime(.{
     .{ "Header1", .{ .text_color = .cyan, .bg_color = .black, .framed = true } },
@@ -296,5 +298,6 @@ const blueish_palette = std.StaticStringMap(StyleOptions).initComptime(.{
     .{ "Entry", .{ .italic = true } },
     .{ "Field", .{ .italic = true, .line_breaks = 0 } },
     .{ "Hint", .{ .italic = true, .text_color = .cyan, .line_breaks = 0 } },
+    .{ "Error", .{ .text_color = .red, .bold = true } },
 });
 const default_palette = blueish_palette;
