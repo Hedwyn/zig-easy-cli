@@ -70,6 +70,7 @@ pub const ParameterError = error{
     MissingArgument,
     InvalidOption,
     UnknownOption,
+    UnknownFlag,
     UnknownArgument,
     TooManyArguments,
     IncorrectArgumentType,
@@ -478,8 +479,8 @@ pub fn CliParser(comptime ctx: CliContext) type {
         const ArgSt = ensureStruct(ArgT);
         const BuiltinSt = ensureStruct(BuiltinOptions);
 
-        const flag_to_name_map = buildShortFlagMap(OptionSt.fields, ctx.opts_info, true);
-        const name_to_flag_map = buildShortFlagMap(OptionSt.fields, ctx.opts_info, false);
+        const flag_to_name_map = buildShortFlagMap(OptionSt.fields, ctx.opts_info, false);
+        const name_to_flag_map = buildShortFlagMap(OptionSt.fields, ctx.opts_info, true);
         const options_info_map = buildOptionInfoMap(OptionSt.fields, ctx.opts_info);
 
         /// Checks if the given argument is a boolean flag
@@ -630,7 +631,14 @@ pub fn CliParser(comptime ctx: CliContext) type {
                     },
                     .ShortFlag => {
                         is_option = true;
-                        current_arg_name = if (options_info_map.get(arg[arg_name_start_idx..])) |opt| opt.name else return CliError.UnknownOption;
+                        current_arg_name = flag_to_name_map.get(arg[arg_name_start_idx..]) orelse {
+                            if (error_payload) |p| {
+                                p.value_str = arg;
+                                p.field_name = arg[arg_name_start_idx..];
+                            }
+                            return CliError.UnknownFlag;
+                        };
+                        // current_arg_name = if (options_info_map.get(arg[arg_name_start_idx..])) |opt| opt.name else return CliError.UnknownOption;
                         if (isFlag(current_arg_name) catch unreachable) {
                             try params.parseFlag(current_arg_name);
                         }
@@ -759,6 +767,10 @@ pub fn CliParser(comptime ctx: CliContext) type {
                     const param_name = err_payload.get_field_name();
                     rich.richPrint("Option `{s}` is unknown", .Error, .{param_name});
                 },
+                ParameterError.UnknownFlag => {
+                    const param_name = err_payload.get_field_name();
+                    rich.richPrint("Flag `{s}` is unknown", .Error, .{param_name});
+                },
                 ParameterError.InvalidChoice => {
                     const param_name = err_payload.get_field_name();
                     rich.richPrint("Option `{s}` is invalid", .Error, .{param_name});
@@ -783,6 +795,18 @@ test "parse with string parameters only" {
         arg_1: ?[]const u8 = null,
     };
     const params = try CliParser(.{ .opts = Options }).parse(&arguments, null);
+    try std.testing.expectEqualStrings("Argument1", params.options.arg_1.?);
+}
+
+test "parse with short flag parameters" {
+    const prompt = "testcli -a Argument1";
+    var arguments = std.mem.split(u8, prompt, " ");
+    const Options = struct {
+        arg_1: ?[]const u8 = null,
+    };
+    const params = try CliParser(.{
+        .opts = Options,
+    }).parse(&arguments, null);
     try std.testing.expectEqualStrings("Argument1", params.options.arg_1.?);
 }
 
