@@ -773,7 +773,8 @@ pub fn CliParser(comptime ctx: CliContext) type {
                 },
                 ParameterError.InvalidChoice => {
                     const param_name = err_payload.get_field_name();
-                    rich.richPrint("Option `{s}` is invalid", .Error, .{param_name});
+                    const param_value = err_payload.get_value_str();
+                    rich.richPrint("Choice `{s}` for `{s}` is invalid", .Error, .{ param_value, param_name });
                 },
                 else => rich.richPrint("Usage error: {}", .Error, .{err}),
             }
