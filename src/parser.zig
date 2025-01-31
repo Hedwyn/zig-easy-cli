@@ -48,6 +48,7 @@ pub const OptionInfo = struct {
     short_name: ?[]const u8 = null,
     internal_name: ?[]const u8 = null,
     help: ?[]const u8 = null,
+    hidden: bool = false,
 };
 
 pub const OptionInternalInfo = struct {
@@ -56,6 +57,7 @@ pub const OptionInternalInfo = struct {
     internal_name: ?[]const u8 = undefined,
     help: ?[]const u8 = null,
     default_value: ?[]const u8 = null,
+    hidden: bool = false,
 };
 
 pub fn castDefaultValue(comptime T: type, comptime default_value: *const anyopaque) T {
@@ -399,6 +401,7 @@ pub fn parseOptionInfo(
         };
         if (getOptionInfo(field.name, options_info)) |info| {
             internal_opt.help = info.help;
+            internal_opt.hidden = info.hidden;
         }
         internal_opt.short_name = flag_map.get(field.name).?;
         out[i] = internal_opt;
@@ -503,7 +506,14 @@ pub fn CliParser(comptime ctx: CliContext) type {
         }
 
         pub fn hasOptions() bool {
-            return (ctx.opts != null);
+            if (ctx.opts) |_| {
+                for (ctx.opts_info) |opt| {
+                    if (!opt.hidden) {
+                        return true;
+                    }
+                }
+            }
+            return false;
         }
 
         pub fn setArgFromString(comptime T: type, arg_name: []const u8, arg_value: []const u8, container: *T) CliError!void {
@@ -638,7 +648,6 @@ pub fn CliParser(comptime ctx: CliContext) type {
                             }
                             return CliError.UnknownFlag;
                         };
-                        // current_arg_name = if (options_info_map.get(arg[arg_name_start_idx..])) |opt| opt.name else return CliError.UnknownOption;
                         if (isFlag(current_arg_name) catch unreachable) {
                             try params.parseFlag(current_arg_name);
                         }
@@ -670,8 +679,6 @@ pub fn CliParser(comptime ctx: CliContext) type {
         }
 
         pub fn emitHelp(self: Self, writer: *const Writer) !void {
-            // TODO: divide this into smaller functions
-            // var flag_map = self.buildShortFlagMap(false);
             const rich = RichWriter{ .writer = writer };
             rich.richPrint("===== Usage =====", .Header2, .{});
             // Showing typical usage
@@ -712,10 +719,13 @@ pub fn CliParser(comptime ctx: CliContext) type {
                     .{},
                 );
                 inline for (std.meta.fields(OptionT)) |field| {
-                    const opt_internal_info = options_info_map.get(field.name) orelse panic(
+                    const opt_internal_info = comptime options_info_map.get(field.name) orelse panic(
                         "Internal error: option {s} internal info has not been extracted properly",
                         .{field.name},
                     );
+                    if (opt_internal_info.hidden) {
+                        continue;
+                    }
                     rich.richPrint(
                         "-{s}, --{s}: {s}",
                         .Field,

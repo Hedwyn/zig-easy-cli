@@ -8,11 +8,13 @@ const ArgInfo = easycli.ArgInfo;
 const DemoOptions = struct {
     surname: ?[]const u8 = null,
     grade: enum { Employee, Boss } = .Employee,
+    secret: ?[]const u8 = null,
 };
 const DemoArgs = struct { name: ?[]const u8 };
 
 const options_doc = [_]OptionInfo{
     .{ .name = "surname", .help = "Your surname" },
+    .{ .name = "secret", .help = "Your secret", .hidden = true },
 };
 
 const arg_doc = [_]ArgInfo{
@@ -34,5 +36,9 @@ pub fn main() !void {
         std.debug.print("Hello {s} {s}!\n", .{ name, surname });
     } else {
         std.debug.print("Hello {s}!\n", .{name});
+    }
+
+    if (params.options.secret) |secret| {
+        std.debug.print("You discovered the secret flag ! Your secret is {s}.\n", .{secret});
     }
 }
