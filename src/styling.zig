@@ -290,7 +290,7 @@ const clay_palette = std.StaticStringMap(StyleOptions).initComptime(.{
     .{ "Error", .{ .text_color = .red, .bold = true } },
 });
 const blueish_palette = std.StaticStringMap(StyleOptions).initComptime(.{
-    .{ "Header1", .{ .text_color = .cyan, .bg_color = .black, .framed = true } },
+    .{ "Header1", .{ .text_color = .cyan, .bg_color = .default, .framed = true } },
     .{
         "Header2",
         .{ .text_color = .cyan, .bg_color = .black },
