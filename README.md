@@ -131,3 +131,19 @@ name: (Optional) text
 -g, --grade: Employee|Boss    [default:Employee]
 
 ```
+
+# Builtin options
+The parser support some builtin flags that are always available regardless of your custom options or arguments:
+* `--help`: Shows the help menu as demonstrated above
+* `--log_level`: Sets the log level for your application. Valid values are **debug**, **info**, **warn**, **err**. **You need to set the asycli log handler as your main log handler for this to be enabled**:
+
+```zig
+// Add this to your main
+pub const std_options = .{
+    // Set your default log level here
+    .log_level = .info,
+
+    // Define logFn to override the std implementation
+    .logFn = easycli.logHandler,
+};
+```

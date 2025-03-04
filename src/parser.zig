@@ -1,5 +1,6 @@
 /// Engine for the CLI utility
 const std = @import("std");
+const log = std.log;
 const styling = @import("styling.zig");
 const fmt = std.fmt;
 
@@ -18,6 +19,29 @@ const RichWriter = styling.RichWriter;
 const Style = styling.Style;
 
 const default_welcome_message = "Welcome to {s} !";
+
+var global_level: log.Level = .info;
+
+/// Set this function as your log handler if you want
+/// zig-easy-cli to manage your logs
+pub fn logHandler(
+    comptime level: std.log.Level,
+    comptime scope: @Type(.EnumLiteral),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    if (@intFromEnum(level) > @intFromEnum(global_level)) {
+        return;
+    }
+    _ = scope;
+    const prefix = "[" ++ comptime level.asText() ++ "] ";
+
+    // Print the message to stderr, silently ignoring any errors
+    std.debug.lockStdErr();
+    defer std.debug.unlockStdErr();
+    const stderr = std.io.getStdErr().writer();
+    nosuspend stderr.print(prefix ++ format ++ "\n", args) catch return;
+}
 
 /// Returns the last member of a path separated by `/`
 pub fn getPathBasename(path: []const u8) []const u8 {
@@ -762,6 +786,10 @@ pub fn CliParser(comptime ctx: CliContext) type {
                 try params.emitHelp(&writer);
                 return null;
             }
+            // handling logs
+            if (params.builtin.log_level) |level| {
+                global_level = level;
+            }
             return params;
         }
 
@@ -795,6 +823,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
 pub const BuiltinOptions = struct {
     help: bool = false,
     cli_name: ?[]const u8 = null,
+    log_level: ?std.log.Level = null,
 };
 // pub const BuiltinParser = CliParser(.{ .options = BuiltinOptions });
 
