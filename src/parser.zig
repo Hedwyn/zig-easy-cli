@@ -117,7 +117,17 @@ const FlagType = enum {
 
 /// Formats the help hint for a set of choices given by enum fields
 /// The choices are separated with '|'
-pub fn formatChoices(fields: []const Type.EnumField) []const u8 {
+pub fn formatEnumChoices(fields: []const Type.EnumField) []const u8 {
+    var choices: []const u8 = "";
+    inline for (fields) |field| {
+        choices = if (choices.len == 0) field.name else choices ++ "|" ++ field.name;
+    }
+    return choices;
+}
+
+/// Formats the help hint for a set of choices given by union fields
+/// The choices are separated with '|'
+pub fn formatUnionChoices(fields: []const Type.UnionField) []const u8 {
     var choices: []const u8 = "";
     inline for (fields) |field| {
         choices = if (choices.len == 0) field.name else choices ++ "|" ++ field.name;
@@ -135,7 +145,8 @@ pub fn getTypeName(comptime T: type) []const u8 {
         .Bool => "flag",
         .Int => "integer",
         .Float => "float",
-        .Enum => |choices| formatChoices(choices.fields),
+        .Enum => |choices| formatEnumChoices(choices.fields),
+        .Union => |choices| "(subcommand) " ++ formatUnionChoices(choices.fields),
         .Optional => |opt| "(Optional) " ++ getTypeName(opt.child),
         else => unreachable,
     };
