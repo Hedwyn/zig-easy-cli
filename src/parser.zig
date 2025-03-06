@@ -10,6 +10,7 @@ const Writer = File.Writer;
 const Type = std.builtin.Type;
 const Struct = Type.Struct;
 const StructField = Type.StructField;
+const UnionField = Type.UnionField;
 // types
 const Allocator = std.mem.Allocator;
 const ArgIterator = anyopaque;
@@ -498,6 +499,37 @@ const CliContext = struct {
     comptime welcome_msg: ?[]const u8 = null,
 };
 
+const ParserType = *const fn (*anyopaque, arg_it: anytype, error_payload: ?*ParamErrPayload) CliError!void;
+
+const max_subcommands = 1000;
+pub fn buildSubParsers(
+    arg_fields: []const StructField,
+) ?std.StaticStringMap(ParserType) {
+    comptime {
+        for (arg_fields) |field| {
+            // TODO: compile error if more than one subcommand
+            switch (@typeInfo(field.type)) {
+                .Union => |u| {
+                    return getSubparsers(u.fields);
+                },
+                else => continue,
+            }
+        }
+    }
+    return null;
+}
+
+pub fn getSubparsers(subcommands: []const UnionField) std.StaticStringMap(ParserType) {
+    var parsers: [subcommands.len]struct { []const u8, ParserType } = undefined;
+    inline for (0.., subcommands) |i, subcmd| {
+        if (!@hasDecl(subcmd.type, "parse_internal")) {
+            @compileError("Unions are reserved for subcommands. Their type should always be a `CliParser`");
+        }
+        parsers[i] = .{ subcmd.name, @ptrCast(&subcmd.type.parse_internal) };
+    }
+    return std.StaticStringMap(ParserType).initComptime(parsers);
+}
+
 /// A struct builder containing the parsed arguments passed by the user in command-line
 /// Provides standalone methods for running the parsing process
 /// `ctx` should provide all the information to layout the parser at comptime
@@ -520,6 +552,8 @@ pub fn CliParser(comptime ctx: CliContext) type {
         const flag_to_name_map = buildShortFlagMap(OptionSt.fields, ctx.opts_info, false);
         const name_to_flag_map = buildShortFlagMap(OptionSt.fields, ctx.opts_info, true);
         const options_info_map = buildOptionInfoMap(OptionSt.fields, ctx.opts_info);
+
+        const subparsers = buildSubParsers(ArgSt.fields);
 
         /// Checks if the given argument is a boolean flag
         fn isFlag(arg_name: []const u8) CliError!bool {
@@ -618,8 +652,15 @@ pub fn CliParser(comptime ctx: CliContext) type {
 
         pub fn parse(arg_it: anytype, error_payload: ?*ParamErrPayload) CliError!Self {
             var params: Self = undefined;
-            initOptionals(OptionT, &(params.options));
-            initOptionals(ArgT, &(params.args));
+            try params.parse_internal(arg_it, error_payload);
+            return params;
+        }
+
+        /// Parses the arguments and writes the results by mutation
+        /// This should only be used as part of recursive procedures, stadnalone function is `parse`
+        pub fn parse_internal(self: *Self, arg_it: anytype, error_payload: ?*ParamErrPayload) CliError!void {
+            initOptionals(OptionT, &(self.options));
+            initOptionals(ArgT, &(self.args));
 
             var is_option: bool = false;
             var flag_type: ?FlagType = null;
@@ -628,7 +669,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
 
             // If no explicit client name was passed,using process name
             const process_name: []const u8 = arg_it.next() orelse panic("Process name is missing from arguments", .{});
-            params.builtin.cli_name = ctx.name orelse getPathBasename(process_name);
+            self.builtin.cli_name = ctx.name orelse getPathBasename(process_name);
             var next_arg = arg_it.next();
             var consume = true;
 
@@ -639,7 +680,13 @@ pub fn CliParser(comptime ctx: CliContext) type {
                 if (flag_type) |_| {
                     consume = true;
                     defer flag_type = null;
-                    params.parseArg(
+                    if (subparsers) |s| {
+                        if (s.get(current_arg_name)) |subparser| {
+                            try subparser(*@field(self.args, current_arg_name), arg_it, error_payload);
+                            continue;
+                        }
+                    }
+                    self.parseArg(
                         current_arg_name,
                         arg,
                         is_option,
@@ -684,19 +731,18 @@ pub fn CliParser(comptime ctx: CliContext) type {
                             return CliError.UnknownFlag;
                         };
                         if (isFlag(current_arg_name) catch unreachable) {
-                            try params.parseFlag(current_arg_name);
+                            try self.parseFlag(current_arg_name);
                         }
                     },
                     else => {
                         is_option = true;
                         current_arg_name = arg[arg_name_start_idx..];
                         if (isFlag(current_arg_name) catch unreachable) {
-                            try params.parseFlag(current_arg_name);
+                            try self.parseFlag(current_arg_name);
                         }
                     },
                 }
             }
-            return params;
         }
 
         pub fn emitWelcomeMessage(self: Self, writer: *const Writer) !void {
@@ -951,4 +997,24 @@ test "parse help" {
     var arguments = std.mem.split(u8, prompt, " ");
     const params = try CliParser(.{}).parse(&arguments, null);
     try std.testing.expect(params.builtin.help);
+}
+
+test "build subcommands" {
+    // const prompt = "testcli subcmd_1";
+    // var arguments = std.mem.split(u8, prompt, " ");
+    const SubParser1 = CliParser(.{});
+    const Args = struct {
+        subcmd: union(enum) {
+            subcmd_1: SubParser1,
+            subcmd_2: CliParser(.{}),
+        },
+    };
+    const arg_fields = switch (@typeInfo(Args)) {
+        .Struct => |s| s.fields,
+        else => unreachable,
+    };
+    const subcmd_map = buildSubParsers(arg_fields) orelse unreachable;
+
+    // _ = subcmd_map;
+    _ = subcmd_map.get("subcmd_1") orelse unreachable;
 }
