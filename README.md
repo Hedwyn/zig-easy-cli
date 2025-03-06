@@ -6,6 +6,9 @@ The main features are:
 * Rich rendering using ANSI escape codes
 * Customizable, you can build your own palettes, use arbitrary streams as output and not just stdout, and parametrize a fair bunch of rendering options.
 
+# Demo
+You can build the examples with `zig build examples`. Currently there's only one example available, which you can run with `zig build whoami`.
+
 # Usage
 CLI applications typically supports two types of parameters: arguments (mandatory parameters that are passed in order), and options, typically identified by flags.
 To get a basic working cli, you only need to define one struct for you arguments (they will be parsed in declaration order) and on struct for your options (with the defaults that you want). Then, simply create an `easycli.CliParser` with your two structs and call `runStandalone()` method to parse the arguments:
@@ -85,7 +88,7 @@ pub fn main() !void {
 
 You can run it as follows:
 ```zig
-zig build run -- 
+zig build whoami -- 
 
 *******************************
 *                             *
@@ -98,18 +101,18 @@ You need to pass your name !
 ```
 
 ```
-zig build run -- John
+zig build whoami -- John
 
 >>> Hello John!
 
-zig build run -- John --surname Doe
+zig build whoami -- John --surname Doe
 
 >>> Hello John Doe!
 ```
 
 Help menu will be generated automatically by zig-easy-cli and can be summoned with `--help`:
 ```
-zig build run -- --help
+zig build whoami -- --help
 
 *******************************
 *                             *
