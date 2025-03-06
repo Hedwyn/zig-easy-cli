@@ -1,5 +1,8 @@
 const std = @import("std");
 
+const examples = &.{
+    "whoami",
+};
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
 // runner.
@@ -23,8 +26,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    _ = b.addModule("parser", .{ .root_source_file = b.path("src/parser.zig") });
-    _ = b.addModule("styling", .{ .root_source_file = b.path("src/styling.zig") });
+    const parser_module = b.addModule("parser", .{ .root_source_file = b.path("src/parser.zig") });
+    const styling_module = b.addModule("styling", .{ .root_source_file = b.path("src/styling.zig") });
 
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
@@ -37,6 +40,24 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    const examples_step = b.step("examples", "Run examples");
+
+    inline for (examples) |example_name| {
+        const example = b.addExecutable(.{
+            .name = example_name,
+            .root_source_file = b.path("examples/" ++ example_name ++ ".zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        example.root_module.addImport("parser", parser_module);
+        example.root_module.addImport("styling", styling_module);
+        const run_example_step = b.step(example_name, "Run " ++ example_name);
+        const example_run = b.addRunArtifact(example);
+        run_example_step.dependOn(&example_run.step);
+    }
+
+    b.default_step.dependOn(examples_step);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
