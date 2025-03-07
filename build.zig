@@ -2,6 +2,7 @@ const std = @import("std");
 
 const examples = &.{
     "whoami",
+    "subcmd",
 };
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
