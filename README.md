@@ -6,6 +6,9 @@ The main features are:
 * Rich rendering using ANSI escape codes
 * Customizable, you can build your own palettes, use arbitrary streams as output and not just stdout, and parametrize a fair bunch of rendering options.
 
+# Requirements
+This is tested for zig 0.13.
+
 # Demo
 You can build the examples with `zig build examples`. Currently there's only one example available, which you can run with `zig build whoami`.
 
