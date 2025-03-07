@@ -105,6 +105,7 @@ pub const ParameterError = error{
     InvalidBooleanValue,
     DuplicatedOptionName,
     DuplicatedFlag,
+    UnknownSubcommand,
 };
 
 pub const CliError = SyntaxError || ParameterError;
@@ -499,7 +500,7 @@ const CliContext = struct {
     comptime welcome_msg: ?[]const u8 = null,
 };
 
-const ParserType = *const fn (*anyopaque, arg_it: anytype, error_payload: ?*ParamErrPayload) CliError!void;
+const ParserType = *const fn (*anyopaque, arg_it: *ArgIterator, error_payload: ?*ParamErrPayload) CliError!void;
 
 const max_subcommands = 1000;
 pub fn buildSubParsers(
@@ -553,7 +554,38 @@ pub fn CliParser(comptime ctx: CliContext) type {
         const name_to_flag_map = buildShortFlagMap(OptionSt.fields, ctx.opts_info, true);
         const options_info_map = buildOptionInfoMap(OptionSt.fields, ctx.opts_info);
 
-        const subparsers = buildSubParsers(ArgSt.fields);
+        // const subparsers = buildSubParsers(ArgSt.fields);
+
+        pub fn runSubparser(
+            self: *Self,
+            cmd_name: []const u8,
+            cmd_value: []const u8,
+            arg_it: anytype,
+            error_payload: ?*ParamErrPayload,
+        ) CliError!void {
+            inline for (ArgSt.fields) |arg| {
+                if (std.mem.eql(u8, cmd_name, arg.name)) {
+                    const fields = switch (@typeInfo(arg.type)) {
+                        .Union => |u| u.fields,
+                        else => return,
+                    };
+                    inline for (fields) |f| {
+                        if (std.mem.eql(u8, cmd_value, f.name)) {
+                            const arg_ptr = &(@field(self.args, arg.name));
+                            return try f.type.parse_internal(@ptrCast(arg_ptr), arg_it, error_payload, false);
+                        }
+                    }
+                    return CliError.UnknownSubcommand;
+                }
+            }
+        }
+
+        pub fn getSubcommand(cmd_name: []const u8) ?ParserType {
+            const subparsers = comptime buildSubParsers(ArgSt.fields);
+            const parsers = subparsers orelse return null;
+            std.debug.print("Looking for subcommand {s} {?}\n", .{ cmd_name, parsers.get(cmd_name) });
+            return parsers.get(cmd_name);
+        }
 
         /// Checks if the given argument is a boolean flag
         fn isFlag(arg_name: []const u8) CliError!bool {
@@ -652,24 +684,31 @@ pub fn CliParser(comptime ctx: CliContext) type {
 
         pub fn parse(arg_it: anytype, error_payload: ?*ParamErrPayload) CliError!Self {
             var params: Self = undefined;
-            try params.parse_internal(arg_it, error_payload);
+            try params.parse_internal(arg_it, error_payload, true);
             return params;
         }
 
         /// Parses the arguments and writes the results by mutation
         /// This should only be used as part of recursive procedures, stadnalone function is `parse`
-        pub fn parse_internal(self: *Self, arg_it: anytype, error_payload: ?*ParamErrPayload) CliError!void {
+        pub fn parse_internal(
+            self: *Self,
+            arg_it: anytype,
+            error_payload: ?*ParamErrPayload,
+            parse_pname: bool,
+        ) CliError!void {
             initOptionals(OptionT, &(self.options));
             initOptionals(ArgT, &(self.args));
-
+            std.debug.print("Entering parser\n", .{});
             var is_option: bool = false;
             var flag_type: ?FlagType = null;
             var current_arg_name: []const u8 = "";
             var arg_idx: usize = 0;
 
             // If no explicit client name was passed,using process name
-            const process_name: []const u8 = arg_it.next() orelse panic("Process name is missing from arguments", .{});
-            self.builtin.cli_name = ctx.name orelse getPathBasename(process_name);
+            if (parse_pname) {
+                const process_name: []const u8 = arg_it.next() orelse panic("Process name is missing from arguments", .{});
+                self.builtin.cli_name = ctx.name orelse getPathBasename(process_name);
+            }
             var next_arg = arg_it.next();
             var consume = true;
 
@@ -680,11 +719,20 @@ pub fn CliParser(comptime ctx: CliContext) type {
                 if (flag_type) |_| {
                     consume = true;
                     defer flag_type = null;
-                    if (subparsers) |s| {
-                        if (s.get(current_arg_name)) |subparser| {
-                            try subparser(*@field(self.args, current_arg_name), arg_it, error_payload);
-                            continue;
-                        }
+                    if (getSubcommand(arg)) |subparser| {
+                        try self.runSubparser(current_arg_name, arg, arg_it, error_payload);
+                        _ = subparser;
+                        // std.debug.print("Found subparser\n", .{});
+                        // var arg_ptr: *anyopaque = undefined;
+                        // TODO: this is a bit convoluted and unsafe, fix that
+                        // inline for (ArgSt.fields) |ag| {
+                        // if (std.mem.eql(u8, ag.name, current_arg_name)) {
+                        // arg_ptr = @ptrCast(&(@field(self.args, ag.name)));
+                        // std.debug.print("Found address {s}\n", .{ag.name});
+                        // }
+                        // }
+                        // try subparser(arg_ptr, arg_it, error_payload);
+                        continue;
                     }
                     self.parseArg(
                         current_arg_name,
