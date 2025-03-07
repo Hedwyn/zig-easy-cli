@@ -580,10 +580,21 @@ pub fn CliParser(comptime ctx: CliContext) type {
             }
         }
 
+        pub fn isSubparser(cmd_name: []const u8) bool {
+            inline for (ArgSt.fields) |arg| {
+                if (std.mem.eql(u8, cmd_name, arg.name)) {
+                    switch (@typeInfo(arg.type)) {
+                        .Union => return true,
+                        else => {},
+                    }
+                }
+            }
+            return false;
+        }
+
         pub fn getSubcommand(cmd_name: []const u8) ?ParserType {
             const subparsers = comptime buildSubParsers(ArgSt.fields);
             const parsers = subparsers orelse return null;
-            std.debug.print("Looking for subcommand {s} {?}\n", .{ cmd_name, parsers.get(cmd_name) });
             return parsers.get(cmd_name);
         }
 
@@ -698,7 +709,6 @@ pub fn CliParser(comptime ctx: CliContext) type {
         ) CliError!void {
             initOptionals(OptionT, &(self.options));
             initOptionals(ArgT, &(self.args));
-            std.debug.print("Entering parser\n", .{});
             var is_option: bool = false;
             var flag_type: ?FlagType = null;
             var current_arg_name: []const u8 = "";
@@ -715,7 +725,6 @@ pub fn CliParser(comptime ctx: CliContext) type {
             var consume = true;
 
             while (next_arg) |arg| {
-                std.debug.print("Processing {s}in {}\n", .{ arg, Self });
                 // consume will be set to false if we have an argument
                 defer next_arg = if (consume) arg_it.next() else next_arg;
 
@@ -723,8 +732,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
                     consume = true;
                     defer flag_type = null;
                     // TODO: replace with simple boolean check, get rid of subparsers var
-                    if (getSubcommand(arg)) |_| {
-                        std.debug.print("Running subparser from {any}\n\n", .{self});
+                    if (isSubparser(current_arg_name)) {
                         try self.runSubparser(current_arg_name, arg, arg_it, error_payload);
                         continue;
                     }
@@ -876,20 +884,16 @@ pub fn CliParser(comptime ctx: CliContext) type {
             writer: *const Writer,
         ) CliError!bool {
             if (self.builtin.help) {
-                std.debug.print("Emitting help on {}\n", .{Self});
                 try self.emitHelp(writer);
                 return true;
             }
             inline for (ArgSt.fields) |arg| {
                 switch (@typeInfo(arg.type)) {
                     .Union => {
-                        std.debug.print("Parent type = {}\n", .{@field(self.args, arg.name)});
                         switch (@field(self.args, arg.name)) {
                             inline else => |*parser| {
-                                // std.debug.print("Parser type = {}\n", .{parser});
                                 if (parser.builtin.help) {
                                     return try parser.emitHelpRecursive(writer);
-                                    // std.debug.print("Help was asked on {s}\n", .{arg.name});
                                 }
                             },
                         }
