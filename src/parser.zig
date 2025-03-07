@@ -572,7 +572,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
                     inline for (fields) |f| {
                         if (std.mem.eql(u8, cmd_value, f.name)) {
                             const arg_ptr = &(@field(self.args, arg.name));
-                            return try f.type.parse_internal(@ptrCast(arg_ptr), arg_it, error_payload, false);
+                            return try f.type.parse_internal(@ptrCast(arg_ptr), arg_it, error_payload, self.builtin.cli_name);
                         }
                     }
                     return CliError.UnknownSubcommand;
@@ -684,7 +684,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
 
         pub fn parse(arg_it: anytype, error_payload: ?*ParamErrPayload) CliError!Self {
             var params: Self = undefined;
-            try params.parse_internal(arg_it, error_payload, true);
+            try params.parse_internal(arg_it, error_payload, null);
             return params;
         }
 
@@ -694,7 +694,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
             self: *Self,
             arg_it: anytype,
             error_payload: ?*ParamErrPayload,
-            parse_pname: bool,
+            pname: ?[]const u8,
         ) CliError!void {
             initOptionals(OptionT, &(self.options));
             initOptionals(ArgT, &(self.args));
@@ -705,7 +705,9 @@ pub fn CliParser(comptime ctx: CliContext) type {
             var arg_idx: usize = 0;
 
             // If no explicit client name was passed,using process name
-            if (parse_pname) {
+            if (pname) |name| {
+                self.builtin.cli_name = ctx.name orelse name;
+            } else {
                 const process_name: []const u8 = arg_it.next() orelse panic("Process name is missing from arguments", .{});
                 self.builtin.cli_name = ctx.name orelse getPathBasename(process_name);
             }
@@ -869,20 +871,50 @@ pub fn CliParser(comptime ctx: CliContext) type {
             }
         }
 
+        pub fn emitHelpRecursive(
+            self: *Self,
+            writer: *const Writer,
+        ) CliError!bool {
+            if (self.builtin.help) {
+                std.debug.print("Emitting help on {}\n", .{Self});
+                try self.emitHelp(writer);
+                return true;
+            }
+            inline for (ArgSt.fields) |arg| {
+                switch (@typeInfo(arg.type)) {
+                    .Union => {
+                        std.debug.print("Parent type = {}\n", .{@field(self.args, arg.name)});
+                        switch (@field(self.args, arg.name)) {
+                            inline else => |*parser| {
+                                // std.debug.print("Parser type = {}\n", .{parser});
+                                if (parser.builtin.help) {
+                                    return try parser.emitHelpRecursive(writer);
+                                    // std.debug.print("Help was asked on {s}\n", .{arg.name});
+                                }
+                            },
+                        }
+                    },
+                    else => continue,
+                }
+            }
+            return false;
+        }
+
         pub fn runStandalone() !?Self {
             var args_it = std.process.args();
             var err_payload: ParamErrPayload = .{};
             const writer = std.io.getStdOut().writer();
-            const params = Self.parse(&args_it, &err_payload) catch |e| {
+            var params = Self.parse(&args_it, &err_payload) catch |e| {
                 displayError(e, err_payload, &writer);
                 return null;
             };
             std.debug.assert(params.builtin.cli_name != null);
             try params.emitWelcomeMessage(&writer);
-            if (params.builtin.help) {
-                try params.emitHelp(&writer);
-                return null;
-            }
+            if (try params.emitHelpRecursive(&writer)) return null;
+            // if (params.builtin.help) {
+            //     try params.emitHelp(&writer);
+            //     return null;
+            // }
             // handling logs
             if (params.builtin.log_level) |level| {
                 global_level = level;
@@ -1037,24 +1069,4 @@ test "parse help" {
     var arguments = std.mem.split(u8, prompt, " ");
     const params = try CliParser(.{}).parse(&arguments, null);
     try std.testing.expect(params.builtin.help);
-}
-
-test "build subcommands" {
-    // const prompt = "testcli subcmd_1";
-    // var arguments = std.mem.split(u8, prompt, " ");
-    const SubParser1 = CliParser(.{});
-    const Args = struct {
-        subcmd: union(enum) {
-            subcmd_1: SubParser1,
-            subcmd_2: CliParser(.{}),
-        },
-    };
-    const arg_fields = switch (@typeInfo(Args)) {
-        .Struct => |s| s.fields,
-        else => unreachable,
-    };
-    const subcmd_map = buildSubParsers(arg_fields) orelse unreachable;
-
-    // _ = subcmd_map;
-    _ = subcmd_map.get("subcmd_1") orelse unreachable;
 }
