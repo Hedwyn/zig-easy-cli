@@ -713,25 +713,17 @@ pub fn CliParser(comptime ctx: CliContext) type {
             var consume = true;
 
             while (next_arg) |arg| {
+                std.debug.print("Processing {s}in {}\n", .{ arg, Self });
                 // consume will be set to false if we have an argument
                 defer next_arg = if (consume) arg_it.next() else next_arg;
 
                 if (flag_type) |_| {
                     consume = true;
                     defer flag_type = null;
-                    if (getSubcommand(arg)) |subparser| {
+                    // TODO: replace with simple boolean check, get rid of subparsers var
+                    if (getSubcommand(arg)) |_| {
+                        std.debug.print("Running subparser from {any}\n\n", .{self});
                         try self.runSubparser(current_arg_name, arg, arg_it, error_payload);
-                        _ = subparser;
-                        // std.debug.print("Found subparser\n", .{});
-                        // var arg_ptr: *anyopaque = undefined;
-                        // TODO: this is a bit convoluted and unsafe, fix that
-                        // inline for (ArgSt.fields) |ag| {
-                        // if (std.mem.eql(u8, ag.name, current_arg_name)) {
-                        // arg_ptr = @ptrCast(&(@field(self.args, ag.name)));
-                        // std.debug.print("Found address {s}\n", .{ag.name});
-                        // }
-                        // }
-                        // try subparser(arg_ptr, arg_it, error_payload);
                         continue;
                     }
                     self.parseArg(
