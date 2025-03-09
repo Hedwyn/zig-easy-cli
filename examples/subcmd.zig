@@ -13,7 +13,7 @@ const ShowArg = struct { name: ?[]const u8 };
 
 const MainArg = struct {
     subcmd: union(enum) {
-        show: easycli.CliParser(.{
+        whoami: easycli.CliParser(.{
             .opts = ShowOptions,
             .args = ShowArg,
             .opts_info = &options_doc,
@@ -45,8 +45,7 @@ pub fn main() !void {
     });
     const main_params = if (try ParserT.runStandalone()) |p| p else return;
     const params = switch (main_params.args.subcmd) {
-        .show => |p| p,
-        // else => unreachable,
+        .whoami => |p| p,
     };
     const name = if (params.args.name) |n| n else {
         std.debug.print("You need to pass your name !\n", .{});

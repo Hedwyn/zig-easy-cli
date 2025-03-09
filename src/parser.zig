@@ -514,32 +514,31 @@ const CliContext = struct {
 const ParserType = *const fn (*anyopaque, arg_it: *ArgIterator, error_payload: ?*ParamErrPayload) CliError!void;
 
 const max_subcommands = 1000;
-pub fn buildSubParsers(
-    arg_fields: []const StructField,
-) ?std.StaticStringMap(ParserType) {
-    comptime {
-        for (arg_fields) |field| {
-            // TODO: compile error if more than one subcommand
-            switch (@typeInfo(field.type)) {
-                .Union => |u| {
-                    return getSubparsers(u.fields);
-                },
-                else => continue,
-            }
-        }
-    }
-    return null;
-}
 
-pub fn getSubparsers(subcommands: []const UnionField) std.StaticStringMap(ParserType) {
-    var parsers: [subcommands.len]struct { []const u8, ParserType } = undefined;
-    inline for (0.., subcommands) |i, subcmd| {
-        if (!@hasDecl(subcmd.type, "parse_internal")) {
-            @compileError("Unions are reserved for subcommands. Their type should always be a `CliParser`");
+/// Compile-time checks on argument fields
+/// Verifies that no more than one subcommand is defined
+pub fn argSanityCheck(arg_fields: []const StructField) void {
+    var subcmd_count: usize = 0;
+    inline for (arg_fields) |arg| {
+        switch (@typeInfo(arg.type)) {
+            .Union => |u| {
+                subcmd_count += 1;
+                inline for (u.fields) |field| {
+                    switch (@typeInfo(field.type)) {
+                        .Struct => {},
+                        else => @compileError("Subcommand option values should be CliParser(...) themselves"),
+                    }
+                    if (!@hasField(field.type, "args") or !@hasField(field.type, "options")) {
+                        @compileError("Subcommand option values should be CliParser(...) themselves");
+                    }
+                }
+            },
+            else => {},
         }
-        parsers[i] = .{ subcmd.name, @ptrCast(&subcmd.type.parse_internal) };
     }
-    return std.StaticStringMap(ParserType).initComptime(parsers);
+    if (subcmd_count > 1) {
+        @compileError("Only one argument can be used a subcommand !\n");
+    }
 }
 
 /// A struct builder containing the parsed arguments passed by the user in command-line
@@ -561,11 +560,10 @@ pub fn CliParser(comptime ctx: CliContext) type {
         const ArgSt = ensureStruct(ArgT);
         const BuiltinSt = ensureStruct(BuiltinOptions);
 
+        /// Checking at comptime if argument struct is OK
         const flag_to_name_map = buildShortFlagMap(OptionSt.fields, ctx.opts_info, false);
         const name_to_flag_map = buildShortFlagMap(OptionSt.fields, ctx.opts_info, true);
         const options_info_map = buildOptionInfoMap(OptionSt.fields, ctx.opts_info);
-
-        // const subparsers = buildSubParsers(ArgSt.fields);
 
         pub fn runSubparser(
             self: *Self,
@@ -591,7 +589,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
             }
         }
 
-        pub fn isSubparser(cmd_name: []const u8) bool {
+        pub fn isSubcommand(cmd_name: []const u8) bool {
             inline for (ArgSt.fields) |arg| {
                 if (std.mem.eql(u8, cmd_name, arg.name)) {
                     switch (@typeInfo(arg.type)) {
@@ -601,12 +599,6 @@ pub fn CliParser(comptime ctx: CliContext) type {
                 }
             }
             return false;
-        }
-
-        pub fn getSubcommand(cmd_name: []const u8) ?ParserType {
-            const subparsers = comptime buildSubParsers(ArgSt.fields);
-            const parsers = subparsers orelse return null;
-            return parsers.get(cmd_name);
         }
 
         /// Checks if the given argument is a boolean flag
@@ -743,7 +735,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
                     consume = true;
                     defer flag_type = null;
                     // TODO: replace with simple boolean check, get rid of subparsers var
-                    if (isSubparser(current_arg_name)) {
+                    if (isSubcommand(current_arg_name)) {
                         try self.runSubparser(current_arg_name, arg, arg_it, error_payload);
                         continue;
                     }
@@ -916,6 +908,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
         }
 
         pub fn runStandalone() !?Self {
+            comptime argSanityCheck(ArgSt.fields);
             var args_it = std.process.args();
             var err_payload: ParamErrPayload = .{};
             const writer = std.io.getStdOut().writer();
