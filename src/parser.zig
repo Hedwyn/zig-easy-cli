@@ -68,6 +68,8 @@ pub const ArgInternalInfo = struct {
     default_value: ?[]const u8 = null,
 };
 
+/// Allows configuring how the CLI should handle
+/// your options and also to add documentation bits
 pub const OptionInfo = struct {
     name: []const u8,
     short_name: ?[]const u8 = null,
@@ -76,6 +78,11 @@ pub const OptionInfo = struct {
     hidden: bool = false,
 };
 
+/// Internal struct used for option info,
+/// which expands `OptionInfo` with fields
+/// that are required for the comp-time logic
+/// but do not need to be passed explicitly by
+/// the CLI developer
 pub const OptionInternalInfo = struct {
     name: []const u8,
     short_name: []const u8 = undefined,
@@ -85,14 +92,17 @@ pub const OptionInternalInfo = struct {
     hidden: bool = false,
 };
 
+/// Tries converting a default value for a field to its expected type
 pub fn castDefaultValue(comptime T: type, comptime default_value: *const anyopaque) T {
     return @as(*T, @ptrCast(@constCast((@alignCast(default_value))))).*;
 }
 
+/// User-errors related to syntax issues
 pub const SyntaxError = error{
     MaxTwoDashesAllowed,
 };
-
+/// User-errors related to passing parameters in
+/// an incorrect way
 pub const ParameterError = error{
     MissingArgument,
     InvalidOption,
@@ -108,6 +118,7 @@ pub const ParameterError = error{
     UnknownSubcommand,
 };
 
+/// All the errors that the parser can emit
 pub const CliError = SyntaxError || ParameterError;
 
 // ShortFlag are passed with `-', LongFlag with '--',
