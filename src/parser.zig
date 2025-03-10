@@ -781,14 +781,24 @@ pub fn CliParser(comptime ctx: CliContext) type {
                             }
                             return CliError.UnknownFlag;
                         };
-                        if (isFlag(current_arg_name) catch unreachable) {
+                        if (try isFlag(current_arg_name)) {
                             try self.parseFlag(current_arg_name);
                         }
                     },
-                    else => {
+                    .LongFlag => {
                         is_option = true;
                         current_arg_name = arg[arg_name_start_idx..];
-                        if (isFlag(current_arg_name) catch unreachable) {
+                        const is_flag = isFlag(current_arg_name) catch |e| {
+                            if (error_payload) |payload| {
+                                payload.value_str = current_arg_name;
+                                payload.field_name = current_arg_name;
+                            }
+                            switch (e) {
+                                CliError.UnknownArgument => return CliError.UnknownOption,
+                                else => return e,
+                            }
+                        };
+                        if (is_flag) {
                             try self.parseFlag(current_arg_name);
                         }
                     },
