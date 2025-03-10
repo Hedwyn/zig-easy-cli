@@ -20,14 +20,6 @@ const arg_doc = [_]ArgInfo{
     .{ .name = "name", .help = "Your name" },
 };
 
-pub const std_options = .{
-    // Set the log level to info
-    .log_level = .info,
-
-    // Define logFn to override the std implementation
-    .logFn = easycli.logHandler,
-};
-
 pub fn main() !void {
     const ParserT = easycli.CliParser(.{
         .opts = DemoOptions,
@@ -36,7 +28,6 @@ pub fn main() !void {
         .args_info = &arg_doc,
     });
     const params = if (try ParserT.runStandalone()) |p| p else return;
-    std.log.info("Hello there !", .{});
 
     const name = if (params.args.name) |n| n else {
         std.debug.print("You need to pass your name !\n", .{});

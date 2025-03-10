@@ -4,22 +4,26 @@ const easycli = @import("parser");
 const OptionInfo = easycli.OptionInfo;
 const ArgInfo = easycli.ArgInfo;
 
-const ShowOptions = struct {
+const WhoamiOptions = struct {
     surname: ?[]const u8 = null,
     grade: enum { Employee, Boss } = .Employee,
     secret: ?[]const u8 = null,
 };
-const ShowArg = struct { name: ?[]const u8 };
+const WhoamiArg = struct { name: ?[]const u8 };
 
-const MainArg = struct {
-    subcmd: union(enum) {
-        whoami: easycli.CliParser(.{
-            .opts = ShowOptions,
-            .args = ShowArg,
+const Subcommands = union(enum) {
+    whoami: easycli.CliParser(
+        .{
+            .opts = WhoamiOptions,
+            .args = WhoamiArg,
             .opts_info = &options_doc,
             .args_info = &arg_doc,
-        }),
-    },
+        },
+    ),
+};
+
+const MainArg = struct {
+    subcmd: Subcommands,
 };
 
 const options_doc = [_]OptionInfo{
@@ -39,14 +43,7 @@ pub const std_options = .{
     .logFn = easycli.logHandler,
 };
 
-pub fn main() !void {
-    const ParserT = easycli.CliParser(.{
-        .args = MainArg,
-    });
-    const main_params = if (try ParserT.runStandalone()) |p| p else return;
-    const params = switch (main_params.args.subcmd) {
-        .whoami => |p| p,
-    };
+pub fn handleWhoami(params: anytype) void {
     const name = if (params.args.name) |n| n else {
         std.debug.print("You need to pass your name !\n", .{});
         return;
@@ -60,4 +57,16 @@ pub fn main() !void {
     if (params.options.secret) |secret| {
         std.debug.print("You discovered the secret flag ! Your secret is {s}.\n", .{secret});
     }
+}
+
+pub fn main() !void {
+    const ParserT = easycli.CliParser(.{
+        .args = MainArg,
+    });
+    const main_params = if (try ParserT.runStandalone()) |p| p else return;
+
+    const params = switch (main_params.args.subcmd) {
+        .whoami => |p| p,
+    };
+    handleWhoami(params);
 }
