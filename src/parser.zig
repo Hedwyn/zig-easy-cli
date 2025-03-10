@@ -768,7 +768,12 @@ pub fn CliParser(comptime ctx: CliContext) type {
                     .Argument => {
                         if (!hasArguments()) continue;
                         is_option = false;
-                        current_arg_name = try introspectArgName(arg_idx);
+                        current_arg_name = introspectArgName(arg_idx) catch |e| {
+                            if (error_payload) |payload| {
+                                payload.value_str = arg;
+                            }
+                            return e;
+                        };
                         arg_idx += 1;
                         consume = false;
                     },
@@ -945,6 +950,10 @@ pub fn CliParser(comptime ctx: CliContext) type {
                 ParameterError.MissingArgument => {
                     const param_name = err_payload.get_field_name();
                     rich.richPrint("Argument `{s}` is mandatory", .Error, .{param_name});
+                },
+                ParameterError.TooManyArguments => {
+                    const param_name = err_payload.get_value_str();
+                    rich.richPrint("Too many arguments: Did not expect {s}", .Error, .{param_name});
                 },
                 ParameterError.UnknownOption => {
                     const param_name = err_payload.get_field_name();
