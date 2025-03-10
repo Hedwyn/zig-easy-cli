@@ -513,8 +513,6 @@ const CliContext = struct {
 
 const ParserType = *const fn (*anyopaque, arg_it: *ArgIterator, error_payload: ?*ParamErrPayload) CliError!void;
 
-const max_subcommands = 1000;
-
 /// Compile-time checks on argument fields
 /// Verifies that no more than one subcommand is defined
 pub fn argSanityCheck(arg_fields: []const StructField) void {
@@ -581,7 +579,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
                     inline for (fields) |f| {
                         if (std.mem.eql(u8, cmd_value, f.name)) {
                             const arg_ptr = &(@field(self.args, arg.name));
-                            return try f.type.parse_internal(@ptrCast(arg_ptr), arg_it, error_payload, self.builtin.cli_name);
+                            return try f.type.parseInternal(@ptrCast(arg_ptr), arg_it, error_payload, self.builtin.cli_name);
                         }
                     }
                     return CliError.UnknownSubcommand;
@@ -698,13 +696,13 @@ pub fn CliParser(comptime ctx: CliContext) type {
 
         pub fn parse(arg_it: anytype, error_payload: ?*ParamErrPayload) CliError!Self {
             var params: Self = undefined;
-            try params.parse_internal(arg_it, error_payload, null);
+            try params.parseInternal(arg_it, error_payload, null);
             return params;
         }
 
         /// Parses the arguments and writes the results by mutation
         /// This should only be used as part of recursive procedures, stadnalone function is `parse`
-        pub fn parse_internal(
+        pub fn parseInternal(
             self: *Self,
             arg_it: anytype,
             error_payload: ?*ParamErrPayload,
