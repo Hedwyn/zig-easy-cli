@@ -274,3 +274,18 @@ const MainArg = struct {
 ```
 
 Note that subcommands is the **only** valid use of Tagged Unions as field for the parser. Using anything that's not a `CliParser(...)` type as variant type will raise a compile-time error.
+
+# Comparison with existing projects for CLI tools
+There are a few other CLI libraries for zig out there.
+
+The core idea of `zig-easy-cli` is to isolate the CLI parts so they do not leak (or as little as possible) on the core logic of your library or application. What that means is that the job of the CLi layer is to provide an easy and convenient way of injecting data from the outside into the core logic: thus, the interface between the CLI and the inner logic should simple structs of data. There are two central core ideas in `zig-easy-cli`:
+* **Strict separation of CLI logic**: `zig-easy-cli` is though as as simple hook to inject data into your core logic without requiring this inner logic to know about your particular CLI tool. As you can see in the examples above, ·`zig-easy-cli` works primarily from a struct for the arguments and a struct for the options, with no added fluff to them, which means they can be passed directly to inner logic without any leaky pure-CLI stuff. The pure-CLI information is passed in isolated structs (these `options_doc` and `args_doc` optional fields that you can pass in your context) and are seperated from the data model. 
+* **Static-memory and comptime- logic**: Another key point is that `zig-easy-cli` is 90%+ pure comptime-logic, and is actually designed to work statically, without using the heap. You can see in the examples above that there isn't an allocator in sight. The struct holding oyur arguments and options do not need to live on the stack. Obviously the part reading from stdout itself uses an allocator internally, but once the parsing is done there's nothing left on the heap and everything exist statically.
+
+This being clarified, you can find below some of the main differences between this project and them to make your choice depending on your needs. Keep in mind that `zig-easy-cli` is still under construction and not quite as stable as these other projects, but it does take a different approach that might in some case be better suited to your needs.</br>
+
+## zig-clap
+[zig-clap](https://github.com/Hejsil/zig-clap) takes the complete opposite approach when it comes to the dependency model and the parsing of arguments. `zig-easy-cli` uses the data model as source of truth and builds a help menu from it; `zig-clap` on the other hand, uses the help menu as source of truth and builds the data model from it. The data that the parser spits out is organized in a similar way, but it has to be dynamically allocated.
+
+## zig-cli
+[zig-cli](https://github.com/sam701/zig-cli) uses structs as source of truth similar to the `options_doc` and `args_doc` in this project, but instead of building statically the data it uses a mutation model where the CLI structs allows passing reference to where the data should be written (by mutation). It also uses primarily dynamic allocation. 
