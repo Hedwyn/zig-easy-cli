@@ -9,8 +9,100 @@ The main features are:
 # Requirements
 This is tested for zig 0.13.
 
-# Demo
-You can build the examples with `zig build examples`. Currently there's only one example available, which you can run with `zig build whoami`.
+# Examples
+You can build the examples with `zig build examples`. Examples can be found in `examples` folder. They all have a standalone command to run them, e.g, to build and run `whoami` example just call `zig build examples whoami -- --help` (*Note: the flags you want to pass to the command should go after `--` separator). The examples are shown below (note: in your terminal they will be rendeez with colors andother embellishments)
+
+## minimal
+A stripped down exmaple to show how little information is required to build a working CLI.
+
+```shell
+zig build examples minimal -- --help
+
+**************************
+*                        *
+*  Welcome to minimal !  *
+*                        *
+**************************
+
+
+===== Usage =====
+>>> minimal {name}
+
+=== Arguments ===
+name: (Optional) text
+```
+
+## whoami
+An example of typical usage of this package.
+```shell
+zig build examples whoami -- --help
+
+
+*************************
+*                       *
+*  Welcome to whoami !  *
+*                       *
+*************************
+
+
+Pass your identity, the program will echo it for you.
+
+===== Usage =====
+>>> whoami {name}
+
+=== Arguments ===
+name: (Optional) text
+    Your name
+
+==== Options ====
+-s, --surname: (Optional) text    [default:none]
+    Your surname
+-g, --grade: Employee|Boss    [default:Employee]
+-se, --secret: (Optional) text    [default:none]
+```
+
+## subcmd
+
+Demonstrates how to defines subcommands with subparsers.
+
+```shell
+zig build examples subcmd -- --help
+
+*************************
+*                       *
+*  Welcome to subcmd !  *
+*                       *
+*************************
+
+
+===== Usage =====
+>>> subcmd {subcmd}
+
+=== Arguments ===
+subcmd: (subcommand) whoami
+```
+
+## secret
+Demonstrates hidden options:
+
+```shell
+zig build examples secret -- --help
+
+*************************
+*                       *
+*  Welcome to secret !  *
+*                       *
+*************************
+
+
+A mysterious program... what does it do ?
+
+===== Usage =====
+>>> secret {username}
+
+=== Arguments ===
+username: (Optional) text
+```
 
 # Usage
 CLI applications typically supports two types of parameters: arguments (mandatory parameters that are passed in order), and options, typically identified by flags.
@@ -153,3 +245,32 @@ pub const std_options = .{
     .logFn = easycli.logHandler,
 };
 ```
+
+# Subcommands
+This tool also supports subcommands, with their individual parsers. An example is available in `examples/subcmd.zig`. Subcommands should be defined as tagged unions, each variant type being a `CliParser` itself. For example:
+
+```zig
+const WhoamiOptions = struct {
+    surname: ?[]const u8 = null,
+    grade: enum { Employee, Boss } = .Employee,
+    secret: ?[]const u8 = null,
+};
+const WhoamiArg = struct { name: ?[]const u8 };
+
+const Subcommands = union(enum) {
+    whoami: easycli.CliParser(
+        .{
+            .opts = WhoamiOptions,
+            .args = WhoamiArg,
+            .opts_info = &options_doc,
+            .args_info = &arg_doc,
+        },
+    ),
+};
+
+const MainArg = struct {
+    subcmd: Subcommands,
+};
+```
+
+Note that subcommands is the **only** valid use of Tagged Unions as field for the parser. Using anything that's not a `CliParser(...)` type as variant type will raise a compile-time error.
