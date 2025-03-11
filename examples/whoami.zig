@@ -26,6 +26,9 @@ pub fn main() !void {
         .args = DemoArgs,
         .opts_info = &options_doc,
         .args_info = &arg_doc,
+        .welcome_msg =
+        \\Pass your identity, the program will echo it for you.
+        ,
     });
     const params = if (try ParserT.runStandalone()) |p| p else return;
 
@@ -42,4 +45,6 @@ pub fn main() !void {
     if (params.options.secret) |secret| {
         std.debug.print("You discovered the secret flag ! Your secret is {s}.\n", .{secret});
     }
+
+    std.debug.print("Your grade is {s}.\n", .{@tagName(params.options.grade)});
 }

@@ -508,7 +508,8 @@ const CliContext = struct {
     opts_info: []const OptionInfo = &.{},
     args_info: []const ArgInfo = &.{},
     name: ?[]const u8 = null,
-    comptime welcome_msg: ?[]const u8 = null,
+    headline: ?[]const u8 = null,
+    welcome_msg: ?[]const u8 = null,
 };
 
 const ParserType = *const fn (*anyopaque, arg_it: *ArgIterator, error_payload: ?*ParamErrPayload) CliError!void;
@@ -814,9 +815,12 @@ pub fn CliParser(comptime ctx: CliContext) type {
         pub fn emitWelcomeMessage(self: Self, writer: *const Writer) !void {
             const rich = RichWriter{ .writer = writer };
             if (self.builtin.cli_name) |name| {
-                const welcome_msg = ctx.welcome_msg orelse default_welcome_message;
-                rich.richPrint(welcome_msg, Style.Header1, .{name});
+                const headline = ctx.headline orelse default_welcome_message;
+                rich.richPrint(headline, Style.Header1, .{name});
                 rich.print("\n", .{});
+                if (ctx.welcome_msg) |welcome_msg| {
+                    rich.richPrint(welcome_msg ++ "\n\n", Style.Hint, .{});
+                }
                 return;
             }
             panic(
