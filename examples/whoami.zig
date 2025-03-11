@@ -13,7 +13,6 @@ const DemoArgs = struct { name: ?[]const u8 };
 
 const options_doc = [_]OptionInfo{
     .{ .name = "surname", .help = "Your surname" },
-    .{ .name = "secret", .help = "Your secret", .hidden = true },
 };
 
 const arg_doc = [_]ArgInfo{
@@ -41,10 +40,5 @@ pub fn main() !void {
     } else {
         std.debug.print("Hello {s}!\n", .{name});
     }
-
-    if (params.options.secret) |secret| {
-        std.debug.print("You discovered the secret flag ! Your secret is {s}.\n", .{secret});
-    }
-
     std.debug.print("Your grade is {s}.\n", .{@tagName(params.options.grade)});
 }
