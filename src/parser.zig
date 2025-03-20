@@ -27,7 +27,7 @@ var global_level: log.Level = .info;
 /// zig-easy-cli to manage your logs
 pub fn logHandler(
     comptime level: std.log.Level,
-    comptime scope: @Type(.EnumLiteral),
+    comptime scope: @Type(.enum_literal),
     comptime format: []const u8,
     args: anytype,
 ) void {
@@ -48,7 +48,7 @@ pub fn logHandler(
 pub fn getPathBasename(path: []const u8) []const u8 {
     // TODO: windows
     var basename = path;
-    var split_it = std.mem.split(u8, basename, "/");
+    var split_it = std.mem.splitSequence(u8, basename, "/");
     while (split_it.next()) |chunk| {
         basename = chunk;
     }
@@ -155,12 +155,12 @@ pub fn getTypeName(comptime T: type) []const u8 {
         return "text";
     }
     const type_description = comptime switch (@typeInfo(T)) {
-        .Bool => "flag",
-        .Int => "integer",
-        .Float => "float",
-        .Enum => |choices| formatEnumChoices(choices.fields),
-        .Union => |choices| "(subcommand) " ++ formatUnionChoices(choices.fields),
-        .Optional => |opt| "(Optional) " ++ getTypeName(opt.child),
+        .bool => "flag",
+        .int => "integer",
+        .float => "float",
+        .@"enum" => |choices| formatEnumChoices(choices.fields),
+        .@"union" => |choices| "(subcommand) " ++ formatUnionChoices(choices.fields),
+        .optional => |opt| "(Optional) " ++ getTypeName(opt.child),
         else => unreachable,
     };
     return type_description;
@@ -178,9 +178,9 @@ pub fn formatDefaultValue(comptime T: type, comptime default_value: *const anyop
         return default;
     }
     const format = comptime switch (@typeInfo(T)) {
-        .Int, .Float => "{d}",
+        .int, .float => "{d}",
         // .Enum => |choices| formatChoices(choices.fields), //TODO fix
-        .Enum => |e| {
+        .@"enum" => |e| {
             for (e.fields) |field| {
                 if (@as(T, @enumFromInt(field.value)) == default) {
                     return field.name;
@@ -188,7 +188,7 @@ pub fn formatDefaultValue(comptime T: type, comptime default_value: *const anyop
                 @compileError("Internal error: failed to find default for enum");
             }
         },
-        .Optional => {
+        .optional => {
             if (default != null) {
                 @compileError(
                     \\Optional fields are only allowed to have null as default value, 
@@ -206,7 +206,7 @@ test "format default string values" {
     const Options = struct { name: []const u8 = "Bob" };
     // const options: Options = comptime .{};
     const option_field = std.meta.fields(Options)[0];
-    const default_name = formatDefaultValue(option_field.type, option_field.default_value.?);
+    const default_name = formatDefaultValue(option_field.type, option_field.default_value_ptr.?);
     try std.testing.expectEqualStrings("Bob", default_name);
 }
 
@@ -215,9 +215,9 @@ test "format default non-string values" {
     // const options: Options = comptime .{};
     const fields = std.meta.fields(Options);
 
-    const default_age = formatDefaultValue(fields[0].type, fields[0].default_value.?);
-    const default_height = formatDefaultValue(fields[1].type, fields[1].default_value.?);
-    const default_is_employee = formatDefaultValue(fields[2].type, fields[2].default_value.?);
+    const default_age = formatDefaultValue(fields[0].type, fields[0].default_value_ptr.?);
+    const default_height = formatDefaultValue(fields[1].type, fields[1].default_value_ptr.?);
+    const default_is_employee = formatDefaultValue(fields[2].type, fields[2].default_value_ptr.?);
 
     try std.testing.expectEqualStrings("42", default_age);
     try std.testing.expectEqualStrings("1.77", default_height);
@@ -228,7 +228,7 @@ test "format default non-string values" {
 fn initOptionals(comptime T: type, container: *T) void {
     inline for (std.meta.fields(T)) |field| {
         switch (@typeInfo(field.type)) {
-            .Optional => @field(container, field.name) = null,
+            .optional => @field(container, field.name) = null,
             else => continue,
         }
     }
@@ -255,15 +255,15 @@ fn autoCast(comptime T: type, value_str: []const u8) CliError!T {
         return value_str;
     }
     return switch (@typeInfo(T)) {
-        .Int => std.fmt.parseInt(T, value_str, 10) catch {
+        .int => std.fmt.parseInt(T, value_str, 10) catch {
             return CliError.IncorrectArgumentType;
         },
-        .Float => std.fmt.parseFloat(T, value_str) catch {
+        .float => std.fmt.parseFloat(T, value_str) catch {
             return CliError.IncorrectArgumentType;
         },
-        .Optional => |option| try autoCast(option.child, value_str),
+        .optional => |option| try autoCast(option.child, value_str),
         // note: for bool, having the flag in the first place means true
-        .Bool => |_| {
+        .bool => |_| {
             if (std.mem.eql(u8, "true", value_str)) {
                 return true;
             }
@@ -272,7 +272,7 @@ fn autoCast(comptime T: type, value_str: []const u8) CliError!T {
             }
             return CliError.InvalidBooleanValue;
         },
-        .Enum => |choices| {
+        .@"enum" => |choices| {
             inline for (choices.fields) |field| {
                 if (std.mem.eql(u8, field.name, value_str)) {
                     return @enumFromInt(field.value);
@@ -289,7 +289,7 @@ fn autoCast(comptime T: type, value_str: []const u8) CliError!T {
 /// Raises a compile time error with an appropriate message if not
 pub fn ensureStruct(comptime T: type) Struct {
     switch (@typeInfo(T)) {
-        .Struct => |s| return s,
+        .@"struct" => |s| return s,
         else => @compileError(
             std.fmt.comptimePrint("{} should be a defined as a struct", .{T}),
         ),
@@ -440,7 +440,7 @@ pub fn parseOptionInfo(
     var out: [option_fields.len]OptionInternalInfo = undefined;
     const flag_map = buildShortFlagMap(option_fields, options_info, true);
     for (0.., option_fields) |i, field| {
-        const default_value = field.default_value orelse @compileError(
+        const default_value = field.default_value_ptr orelse @compileError(
             \\All options should have a default !
         );
         var internal_opt = OptionInternalInfo{
@@ -520,11 +520,11 @@ pub fn argSanityCheck(arg_fields: []const StructField) void {
     var subcmd_count: usize = 0;
     inline for (arg_fields) |arg| {
         switch (@typeInfo(arg.type)) {
-            .Union => |u| {
+            .@"union" => |u| {
                 subcmd_count += 1;
                 inline for (u.fields) |field| {
                     switch (@typeInfo(field.type)) {
-                        .Struct => {},
+                        .@"struct" => {},
                         else => @compileError("Subcommand option values should be CliParser(...) themselves"),
                     }
                     if (!@hasField(field.type, "args") or !@hasField(field.type, "options")) {
@@ -574,7 +574,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
             inline for (ArgSt.fields) |arg| {
                 if (std.mem.eql(u8, cmd_name, arg.name)) {
                     const fields = switch (@typeInfo(arg.type)) {
-                        .Union => |u| u.fields,
+                        .@"union" => |u| u.fields,
                         else => return,
                     };
                     inline for (fields) |f| {
@@ -592,7 +592,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
             inline for (ArgSt.fields) |arg| {
                 if (std.mem.eql(u8, cmd_name, arg.name)) {
                     switch (@typeInfo(arg.type)) {
-                        .Union => return true,
+                        .@"union" => return true,
                         else => {},
                     }
                 }
@@ -606,7 +606,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
                 inline for (type_st.fields) |field| {
                     if (std.mem.eql(u8, field.name, arg_name)) {
                         return switch (@typeInfo(field.type)) {
-                            .Bool => true,
+                            .bool => true,
                             else => false,
                         };
                     }
@@ -909,7 +909,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
             }
             inline for (ArgSt.fields) |arg| {
                 switch (@typeInfo(arg.type)) {
-                    .Union => {
+                    .@"union" => {
                         switch (@field(self.args, arg.name)) {
                             inline else => |*parser| {
                                 if (parser.builtin.help) {
@@ -988,7 +988,7 @@ pub const BuiltinOptions = struct {
 // Basic test case that only uses options and does not require casting
 test "parse with string parameters only" {
     const prompt = "testcli --arg_1 Argument1";
-    var arguments = std.mem.split(u8, prompt, " ");
+    var arguments = std.mem.splitSequence(u8, prompt, " ");
     const Options = struct {
         arg_1: ?[]const u8 = null,
     };
@@ -998,7 +998,7 @@ test "parse with string parameters only" {
 
 test "parse with short flag parameters" {
     const prompt = "testcli -a Argument1";
-    var arguments = std.mem.split(u8, prompt, " ");
+    var arguments = std.mem.splitSequence(u8, prompt, " ");
     const Options = struct {
         arg_1: ?[]const u8 = null,
     };
@@ -1010,7 +1010,7 @@ test "parse with short flag parameters" {
 
 test "parse single argument" {
     const prompt = "testcli Argument1";
-    var arguments = std.mem.split(u8, prompt, " ");
+    var arguments = std.mem.splitSequence(u8, prompt, " ");
     const Args = struct {
         arg_1: ?[]const u8,
     };
@@ -1020,7 +1020,7 @@ test "parse single argument" {
 
 test "parse many arguments" {
     const prompt = "testcli Argument1 Argument2";
-    var arguments = std.mem.split(u8, prompt, " ");
+    var arguments = std.mem.splitSequence(u8, prompt, " ");
     const Args = struct {
         arg_1: ?[]const u8 = null,
         arg_2: ?[]const u8 = null,
@@ -1032,7 +1032,7 @@ test "parse many arguments" {
 
 test "parse integer argument" {
     const prompt = "testcli 42";
-    var arguments = std.mem.split(u8, prompt, " ");
+    var arguments = std.mem.splitSequence(u8, prompt, " ");
     const Args = struct {
         arg_1: i32,
     };
@@ -1042,7 +1042,7 @@ test "parse integer argument" {
 
 test "parse float argument" {
     const prompt = "testcli 3.14";
-    var arguments = std.mem.split(u8, prompt, " ");
+    var arguments = std.mem.splitSequence(u8, prompt, " ");
     const Args = struct {
         arg_1: f64,
     };
@@ -1052,7 +1052,7 @@ test "parse float argument" {
 
 test "parse boolean flag" {
     const prompt = "testcli --enable";
-    var arguments = std.mem.split(u8, prompt, " ");
+    var arguments = std.mem.splitSequence(u8, prompt, " ");
     const Options = struct {
         enable: bool = false,
     };
@@ -1077,7 +1077,7 @@ test "parse choices valid case" {
         Choices.choice_c,
     };
     for (0.., test_cases) |i, prompt| {
-        var arguments = std.mem.split(u8, prompt, " ");
+        var arguments = std.mem.splitSequence(u8, prompt, " ");
         const params = try CliParser(.{ .opts = Options }).parse(&arguments, null);
         try std.testing.expectEqual(expected[i], params.options.choice);
     }
@@ -1089,13 +1089,13 @@ test "parse choices invalid case" {
         choice: Choices = Choices.choice_a,
     };
     const prompt = "testcli --choice invalid";
-    var arguments = std.mem.split(u8, prompt, " ");
+    var arguments = std.mem.splitSequence(u8, prompt, " ");
     try std.testing.expectEqual(CliParser(.{ .opts = Options }).parse(&arguments, null), CliError.InvalidChoice);
 }
 
 test "parse help" {
     const prompt = "testcli --help";
-    var arguments = std.mem.split(u8, prompt, " ");
+    var arguments = std.mem.splitSequence(u8, prompt, " ");
     const params = try CliParser(.{}).parse(&arguments, null);
     try std.testing.expect(params.builtin.help);
 }

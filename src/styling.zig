@@ -215,7 +215,7 @@ pub const RichWriter = struct {
             self.print(format, args);
         }
         self.write(reset);
-        for (options.line_breaks) |_| {
+        for (0..options.line_breaks) |_| {
             self.write("\n");
         }
     }
@@ -282,22 +282,22 @@ pub fn writeFramedText(writer: *const Writer, text: []const u8, parameters: Fram
 
 // Base color palettes
 const clay_palette = std.StaticStringMap(StyleOptions).initComptime(.{
-    .{ "Header1", .{ .text_color = .clay, .framed = true, .bold = true } },
-    .{ "Header2", .{ .text_color = .black, .bg_color = .yellow } },
-    .{ "Entry", .{ .italic = true } },
-    .{ "Field", .{ .italic = true, .line_breaks = 0 } },
-    .{ "Hint", .{ .bold = true, .line_breaks = 0 } },
-    .{ "Error", .{ .text_color = .red, .bold = true } },
+    .{ "Header1", StyleOptions{ .text_color = .clay, .framed = true, .bold = true } },
+    .{ "Header2", StyleOptions{ .text_color = .black, .bg_color = .yellow } },
+    .{ "Entry", StyleOptions{ .italic = true } },
+    .{ "Field", StyleOptions{ .italic = true, .line_breaks = 0 } },
+    .{ "Hint", StyleOptions{ .bold = true, .line_breaks = 0 } },
+    .{ "Error", StyleOptions{ .text_color = .red, .bold = true } },
 });
 const blueish_palette = std.StaticStringMap(StyleOptions).initComptime(.{
-    .{ "Header1", .{ .text_color = .cyan, .bg_color = .default, .framed = true } },
+    .{ "Header1", StyleOptions{ .text_color = .cyan, .bg_color = .default, .framed = true } },
     .{
         "Header2",
-        .{ .text_color = .cyan, .bg_color = .black },
+        StyleOptions{ .text_color = .cyan, .bg_color = .black },
     },
-    .{ "Entry", .{ .italic = true } },
-    .{ "Field", .{ .italic = true, .line_breaks = 0 } },
-    .{ "Hint", .{ .italic = true, .text_color = .cyan, .line_breaks = 0 } },
-    .{ "Error", .{ .text_color = .red, .bold = true } },
+    .{ "Entry", StyleOptions{ .italic = true } },
+    .{ "Field", StyleOptions{ .italic = true, .line_breaks = 0 } },
+    .{ "Hint", StyleOptions{ .italic = true, .text_color = .cyan, .line_breaks = 0 } },
+    .{ "Error", StyleOptions{ .text_color = .red, .bold = true } },
 });
 const default_palette = blueish_palette;

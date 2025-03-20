@@ -18,7 +18,7 @@ const arg_doc = [_]ArgInfo{
     .{ .name = "message", .help = "Message to log" },
 };
 
-pub const std_options = .{
+pub const std_options = std.Options{
     // Set the log level to info
     .log_level = .info,
 
