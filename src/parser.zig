@@ -940,12 +940,10 @@ pub fn CliParser(comptime ctx: CliContext) type {
                 return null;
             };
             std.debug.assert(params.builtin.cli_name != null);
-            try params.emitWelcomeMessage(&writer);
-            if (try params.emitHelpRecursive(&writer)) return null;
-            // if (params.builtin.help) {
-            //     try params.emitHelp(&writer);
-            //     return null;
-            // }
+            if (!params.builtin.quiet) {
+                try params.emitWelcomeMessage(&writer);
+                if (try params.emitHelpRecursive(&writer)) return null;
+            }
             // handling logs
             if (params.builtin.log_level) |level| {
                 global_level = level;
@@ -984,10 +982,13 @@ pub fn CliParser(comptime ctx: CliContext) type {
     };
 }
 
+/// Builtin options that are bundled autoamtically
+/// with every CLI parser
 pub const BuiltinOptions = struct {
     help: bool = false,
     cli_name: ?[]const u8 = null,
     log_level: ?std.log.Level = null,
+    quiet: bool = false,
 };
 // pub const BuiltinParser = CliParser(.{ .options = BuiltinOptions });
 
