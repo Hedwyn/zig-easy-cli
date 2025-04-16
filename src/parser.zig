@@ -627,7 +627,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
                     }
                 }
             }
-            return (ctx.opts_info.len > 0);
+            return (ctx.opts != null);
         }
 
         pub fn setArgFromString(comptime T: type, arg_name: []const u8, arg_value: []const u8, container: *T) CliError!void {
