@@ -224,12 +224,18 @@ test "format default non-string values" {
     try std.testing.expectEqualStrings("false", default_is_employee);
 }
 
-/// Init all optional fields to null in a struct
-fn initOptionals(comptime T: type, container: *T) void {
+/// Init all fields to their default value.
+/// Optionals are forced to null
+fn initDefaults(comptime T: type, container: *T) void {
     inline for (std.meta.fields(T)) |field| {
         switch (@typeInfo(field.type)) {
             .optional => @field(container, field.name) = null,
-            else => continue,
+            else => {
+                if (field.default_value_ptr) |ptr| {
+                    const value_ptr = @as(*field.type, @ptrCast(@constCast(@alignCast(ptr))));
+                    @field(container, field.name) = value_ptr.*;
+                }
+            },
         }
     }
 }
@@ -709,8 +715,8 @@ pub fn CliParser(comptime ctx: CliContext) type {
             error_payload: ?*ParamErrPayload,
             pname: ?[]const u8,
         ) CliError!void {
-            initOptionals(OptionT, &(self.options));
-            initOptionals(ArgT, &(self.args));
+            initDefaults(OptionT, &(self.options));
+            initDefaults(ArgT, &(self.args));
             var is_option: bool = false;
             var flag_type: ?FlagType = null;
             var current_arg_name: []const u8 = "";
