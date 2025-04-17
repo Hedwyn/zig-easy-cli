@@ -4,10 +4,11 @@ The main features are:
 * Ease of use, you can get a working CLI app by defining a single struct
 * Strong inference based on comptime programming, automatically builds the help menu
 * Rich rendering using ANSI escape codes
-* Customizable, you can build your own palettes, use arbitrary streams as output and not just stdout, and parametrize a fair bunch of rendering options.
+* Solid defaults to get a decent experience out of the box without any fancy customization.
+* Yet super customizable, you can build your own palettes, use arbitrary streams as output and not just stdout, and parametrize a fair bunch of rendering options.
 
 # Requirements
-This is tested for zig 0.13.
+Requires zig 0.14. Support for zig 0.15 is currently untested. For zig 0.13, use the dedicated branch.
 
 # Examples
 You can build the examples with `zig build examples`. Examples can be found in `examples` folder. They all have a standalone command to run them, e.g, to build and run `whoami` example just call `zig build examples whoami -- --help` (*Note: the flags you want to pass to the command should go after `--` separator). The examples are shown below (note: in your terminal they will be rendeez with colors andother embellishments)
@@ -245,6 +246,9 @@ pub const std_options = .{
     .logFn = easycli.logHandler,
 };
 ```
+
+* `--quiet`: runs the parsing without printing anything to standard output (or any stream used as the main output). You can also check the value for this parsed flags if you want to also mute other parts of your own processing.
+* `--palette`: specifies which palette to use for styling.
 
 # Subcommands
 This tool also supports subcommands, with their individual parsers. An example is available in `examples/subcmd.zig`. Subcommands should be defined as tagged unions, each variant type being a `CliParser` itself. For example:
