@@ -158,7 +158,7 @@ pub const Style = enum {
     Hint,
     Error,
 
-    pub fn lookupPalette(self: Style, palette: std.StaticStringMap(StyleOptions)) ?StyleOptions {
+    pub fn lookupStyle(self: Style, palette: std.StaticStringMap(StyleOptions)) ?StyleOptions {
         inline for (std.meta.fields(Style)) |field| {
             if ((field.value) == @intFromEnum(self)) {
                 return palette.get(field.name);
@@ -171,6 +171,7 @@ pub const Style = enum {
 pub const RichWriter = struct {
     writer: *const Writer,
     on_error: ?(*const fn (WriteError) void) = null,
+    palette: std.StaticStringMap(StyleOptions) = default_palette,
 
     pub fn write(self: RichWriter, bytes: []const u8) void {
         _ = self.writer.write(bytes) catch |err| {
@@ -221,7 +222,7 @@ pub const RichWriter = struct {
     }
 
     pub fn richPrint(self: RichWriter, comptime format: []const u8, style: Style, args: anytype) void {
-        if (style.lookupPalette(default_palette)) |options| {
+        if (style.lookupStyle(self.palette)) |options| {
             self.styledPrint(format, options, args);
         } else {
             panic("Style variant not declared in Palette: {any}", .{style});
@@ -281,7 +282,7 @@ pub fn writeFramedText(writer: *const Writer, text: []const u8, parameters: Fram
 }
 
 // Base color palettes
-const clay_palette = std.StaticStringMap(StyleOptions).initComptime(.{
+pub const clay_palette = std.StaticStringMap(StyleOptions).initComptime(.{
     .{ "Header1", StyleOptions{ .text_color = .clay, .framed = true, .bold = true } },
     .{ "Header2", StyleOptions{ .text_color = .black, .bg_color = .yellow } },
     .{ "Entry", StyleOptions{ .italic = true } },
@@ -289,15 +290,21 @@ const clay_palette = std.StaticStringMap(StyleOptions).initComptime(.{
     .{ "Hint", StyleOptions{ .bold = true, .line_breaks = 0 } },
     .{ "Error", StyleOptions{ .text_color = .red, .bold = true } },
 });
-const blueish_palette = std.StaticStringMap(StyleOptions).initComptime(.{
+pub const blueish_palette = std.StaticStringMap(StyleOptions).initComptime(.{
     .{ "Header1", StyleOptions{ .text_color = .cyan, .bg_color = .default, .framed = true } },
     .{
         "Header2",
         StyleOptions{ .text_color = .cyan, .bg_color = .black },
     },
     .{ "Entry", StyleOptions{ .italic = true } },
-    .{ "Field", StyleOptions{ .italic = true, .line_breaks = 0 } },
+    .{ "Field", StyleOptions{ .italic = true, .line_breaks = 0, .bg_color = .black } },
     .{ "Hint", StyleOptions{ .italic = true, .text_color = .cyan, .line_breaks = 0 } },
     .{ "Error", StyleOptions{ .text_color = .red, .bold = true } },
+});
+
+pub const palettes = std.StaticStringMap(std.StaticStringMap(StyleOptions)).initComptime(.{
+    .{ "clay", clay_palette },
+    .{ "blue", blueish_palette },
+    .{ "default", default_palette },
 });
 const default_palette = blueish_palette;

@@ -721,6 +721,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
         ) CliError!void {
             initDefaults(OptionT, &(self.options));
             initDefaults(ArgT, &(self.args));
+            initDefaults(BuiltinOptions, &(self.builtin));
             var is_option: bool = false;
             var flag_type: ?FlagType = null;
             var current_arg_name: []const u8 = "";
@@ -822,14 +823,13 @@ pub fn CliParser(comptime ctx: CliContext) type {
             }
         }
 
-        pub fn emitWelcomeMessage(self: Self, writer: *const Writer) !void {
-            const rich = RichWriter{ .writer = writer };
+        pub fn emitWelcomeMessage(self: Self, writer: *const RichWriter) !void {
             if (self.builtin.cli_name) |name| {
                 const headline = ctx.headline orelse default_welcome_message;
-                rich.richPrint(headline, Style.Header1, .{name});
-                rich.print("\n", .{});
+                writer.richPrint(headline, Style.Header1, .{name});
+                writer.print("\n", .{});
                 if (ctx.welcome_msg) |welcome_msg| {
-                    rich.richPrint(welcome_msg ++ "\n\n", Style.Hint, .{});
+                    writer.richPrint(welcome_msg ++ "\n\n", Style.Hint, .{});
                 }
                 return;
             }
@@ -839,25 +839,24 @@ pub fn CliParser(comptime ctx: CliContext) type {
             , .{});
         }
 
-        pub fn emitHelp(self: Self, writer: *const Writer) !void {
-            const rich = RichWriter{ .writer = writer };
-            rich.richPrint("===== Usage =====", .Header2, .{});
+        pub fn emitHelp(self: Self, writer: *const RichWriter) !void {
+            writer.richPrint("===== Usage =====", .Header2, .{});
             // Showing typical usage
-            rich.richPrint(">>> {s}", .Field, .{self.builtin.cli_name.?});
+            writer.richPrint(">>> {s}", .Field, .{self.builtin.cli_name.?});
             inline for (std.meta.fields(ArgT)) |field| {
-                rich.richPrint(" {{{s}}}  ", .Field, .{field.name});
+                writer.richPrint(" {{{s}}}  ", .Field, .{field.name});
             }
-            rich.write("\n\n");
+            writer.write("\n\n");
 
             // Formatting argument doc
             if (hasArguments()) {
-                rich.richPrint(
+                writer.richPrint(
                     "=== Arguments ===",
                     .Header2,
                     .{},
                 );
                 inline for (std.meta.fields(ArgT)) |field| {
-                    rich.richPrint(
+                    writer.richPrint(
                         "{s}: {s}",
                         .Entry,
                         .{
@@ -867,14 +866,14 @@ pub fn CliParser(comptime ctx: CliContext) type {
                     );
                     if (getArgInfo(field.name, ctx.args_info)) |arg| {
                         if (arg.help) |help| {
-                            rich.print("    {s}\n", .{help});
+                            writer.print("    {s}\n", .{help});
                         }
                     }
                 }
-                rich.write("\n");
+                writer.write("\n");
             }
             if (hasOptions()) {
-                rich.richPrint(
+                writer.richPrint(
                     "==== Options ====",
                     .Header2,
                     .{},
@@ -887,7 +886,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
                     if (opt_internal_info.hidden) {
                         continue;
                     }
-                    rich.richPrint(
+                    writer.richPrint(
                         "-{s}, --{s}: {s}",
                         .Field,
                         .{
@@ -897,12 +896,12 @@ pub fn CliParser(comptime ctx: CliContext) type {
                         },
                     );
                     if (opt_internal_info.default_value) |default| {
-                        rich.richPrint("    [default:{s}]", .Hint, .{default});
+                        writer.richPrint("    [default:{s}]", .Hint, .{default});
                     }
-                    rich.write("\n");
+                    writer.write("\n");
                     if (getOptionInfo(field.name, ctx.opts_info)) |opt| {
                         if (opt.help) |help| {
-                            rich.print("    {s}\n", .{help});
+                            writer.print("    {s}\n", .{help});
                         }
                     }
                 }
@@ -911,7 +910,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
 
         pub fn emitHelpRecursive(
             self: *Self,
-            writer: *const Writer,
+            writer: *const RichWriter,
         ) CliError!bool {
             if (self.builtin.help) {
                 try self.emitHelp(writer);
@@ -943,10 +942,12 @@ pub fn CliParser(comptime ctx: CliContext) type {
                 displayError(e, err_payload, &writer);
                 return null;
             };
+            const user_palette = styling.palettes.get(params.builtin.palette).?;
+            const rich_writer = RichWriter{ .writer = &writer, .palette = user_palette };
             std.debug.assert(params.builtin.cli_name != null);
             if (!params.builtin.quiet) {
-                try params.emitWelcomeMessage(&writer);
-                if (try params.emitHelpRecursive(&writer)) return null;
+                try params.emitWelcomeMessage(&rich_writer);
+                if (try params.emitHelpRecursive(&rich_writer)) return null;
             }
             // handling logs
             if (params.builtin.log_level) |level| {
@@ -993,6 +994,7 @@ pub const BuiltinOptions = struct {
     cli_name: ?[]const u8 = null,
     log_level: ?std.log.Level = null,
     quiet: bool = false,
+    palette: []const u8 = "default",
 };
 // pub const BuiltinParser = CliParser(.{ .options = BuiltinOptions });
 
