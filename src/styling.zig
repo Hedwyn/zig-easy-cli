@@ -41,6 +41,7 @@ const AnsiColorCodes = enum(u16) {
     // 256 bits colors below
     // Adding a 256 bits offset to differentiate from
     // base colors
+    dark_green = 256 + 22,
     clay = 256 + 172,
     turquoise = 256 + 29,
 
@@ -287,7 +288,7 @@ pub const clay_palette = std.StaticStringMap(StyleOptions).initComptime(.{
     .{ "Header2", StyleOptions{ .text_color = .black, .bg_color = .yellow } },
     .{ "Entry", StyleOptions{ .italic = true } },
     .{ "Field", StyleOptions{ .italic = true, .line_breaks = 0 } },
-    .{ "Hint", StyleOptions{ .bold = true, .line_breaks = 0 } },
+    .{ "Hint", StyleOptions{ .bold = true, .text_color = .clay, .line_breaks = 0 } },
     .{ "Error", StyleOptions{ .text_color = .red, .bold = true } },
 });
 pub const blueish_palette = std.StaticStringMap(StyleOptions).initComptime(.{
@@ -302,9 +303,32 @@ pub const blueish_palette = std.StaticStringMap(StyleOptions).initComptime(.{
     .{ "Error", StyleOptions{ .text_color = .red, .bold = true } },
 });
 
+pub const christmas_palette = std.StaticStringMap(StyleOptions).initComptime(.{
+    .{ "Header1", StyleOptions{ .text_color = .black, .bg_color = .green, .framed = true } },
+    .{
+        "Header2",
+        StyleOptions{ .text_color = .green, .bg_color = .default },
+    },
+    .{ "Entry", StyleOptions{ .text_color = .red, .italic = true } },
+    .{ "Field", StyleOptions{ .text_color = .red, .italic = true, .line_breaks = 0, .bg_color = .black } },
+    .{ "Hint", StyleOptions{ .italic = true, .text_color = .green, .line_breaks = 0 } },
+    .{ "Error", StyleOptions{ .text_color = .red, .bold = true } },
+});
+
+pub const forest_palette = std.StaticStringMap(StyleOptions).initComptime(.{
+    .{ "Header1", StyleOptions{ .text_color = .green, .bg_color = .default, .framed = true } },
+    .{ "Header2", StyleOptions{ .text_color = .black, .bg_color = .green } },
+    .{ "Entry", StyleOptions{ .text_color = .green, .bg_color = .black, .italic = true } },
+    .{ "Field", StyleOptions{ .text_color = .green, .italic = true, .line_breaks = 0, .bg_color = .black } },
+    .{ "Hint", StyleOptions{ .italic = true, .text_color = .green, .line_breaks = 0 } },
+    .{ "Error", StyleOptions{ .text_color = .red, .bold = true } },
+});
+
 pub const palettes = std.StaticStringMap(std.StaticStringMap(StyleOptions)).initComptime(.{
     .{ "clay", clay_palette },
     .{ "blue", blueish_palette },
+    .{ "christmas", christmas_palette },
+    .{ "forest", forest_palette },
     .{ "default", default_palette },
 });
 const default_palette = blueish_palette;

@@ -116,6 +116,7 @@ pub const ParameterError = error{
     DuplicatedOptionName,
     DuplicatedFlag,
     UnknownSubcommand,
+    UnknownPalette,
 };
 
 /// All the errors that the parser can emit
@@ -942,7 +943,12 @@ pub fn CliParser(comptime ctx: CliContext) type {
                 displayError(e, err_payload, &writer);
                 return null;
             };
-            const user_palette = styling.palettes.get(params.builtin.palette).?;
+            const user_palette = styling.palettes.get(params.builtin.palette) orelse {
+                err_payload.field_name = "palette";
+                err_payload.value_str = params.builtin.palette;
+                displayError(CliError.UnknownPalette, err_payload, &writer);
+                return null;
+            };
             const rich_writer = RichWriter{ .writer = &writer, .palette = user_palette };
             std.debug.assert(params.builtin.cli_name != null);
             if (!params.builtin.quiet) {
@@ -980,6 +986,10 @@ pub fn CliParser(comptime ctx: CliContext) type {
                     const param_name = err_payload.get_field_name();
                     const param_value = err_payload.get_value_str();
                     rich.richPrint("Choice `{s}` for `{s}` is invalid", .Error, .{ param_value, param_name });
+                },
+                ParameterError.UnknownPalette => {
+                    const param_value = err_payload.get_value_str();
+                    rich.richPrint("Unknown color palette `{s}`", .Error, .{param_value});
                 },
                 else => rich.richPrint("Usage error: {}", .Error, .{err}),
             }
