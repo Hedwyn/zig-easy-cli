@@ -585,8 +585,12 @@ pub fn CliParser(comptime ctx: CliContext) type {
                     };
                     inline for (fields) |f| {
                         if (std.mem.eql(u8, cmd_value, f.name)) {
-                            const arg_ptr = &(@field(self.args, arg.name));
-                            return try f.type.parseInternal(@ptrCast(arg_ptr), arg_it, error_payload, self.builtin.cli_name);
+                            @field(self.args, arg.name) = @unionInit(arg.type, f.name, undefined);
+                            return try @field(@field(self.args, arg.name), f.name).parseInternal(
+                                arg_it,
+                                error_payload,
+                                self.builtin.cli_name,
+                            );
                         }
                     }
                     return CliError.UnknownSubcommand;
