@@ -117,6 +117,8 @@ pub const ParameterError = error{
     DuplicatedFlag,
     UnknownSubcommand,
     UnknownPalette,
+    FileTooBig,
+    InvalidJSON,
 };
 
 /// All the errors that the parser can emit
@@ -712,6 +714,46 @@ pub fn CliParser(comptime ctx: CliContext) type {
             return params;
         }
 
+        pub fn loadFromJsonFile(json_path: []const u8, allocator: Allocator) !Self {
+            const file = try std.fs.cwd().openFile(json_path, .{});
+            const reader = file.reader();
+            const buffer = reader.readAllAlloc(allocator, 1 << 32) catch return CliError.FileTooBig;
+            defer allocator.free(buffer);
+            return Self.loadFromJson(buffer, allocator);
+        }
+
+        pub fn loadFromJson(json_string: []const u8, allocator: Allocator) !Self {
+            const options: Self.OptionT = if (ctx.opts) |optT| blk: {
+                const parsed = try std.json.parseFromSlice(
+                    optT,
+                    allocator,
+                    json_string,
+                    .{ .ignore_unknown_fields = true },
+                );
+                defer parsed.deinit();
+                break :blk parsed.value;
+            } else .{};
+            const args: Self.ArgT = if (ctx.args) |argT| blk: {
+                const parsed = try std.json.parseFromSlice(
+                    argT,
+                    allocator,
+                    json_string,
+                    .{ .ignore_unknown_fields = true },
+                );
+                defer parsed.deinit();
+                break :blk parsed.value;
+            } else .{};
+            const parsed = (try std.json.parseFromSlice(
+                BuiltinOptions,
+                allocator,
+                json_string,
+                .{ .ignore_unknown_fields = true },
+            ));
+            defer parsed.deinit();
+            const builtin = parsed.value;
+            return .{ .options = options, .args = args, .builtin = builtin };
+        }
+
         /// Parses the arguments and writes the results by mutation
         /// This should only be used as part of recursive procedures, stadnalone function is `parse`
         pub fn parseInternal(
@@ -1121,4 +1163,17 @@ test "parse help" {
     var arguments = std.mem.splitSequence(u8, prompt, " ");
     const params = try CliParser(.{}).parse(&arguments, null);
     try std.testing.expect(params.builtin.help);
+}
+
+test "parse from JSON" {
+    const Options = struct {
+        arg_1: ?[]const u8 = null,
+    };
+    const json_string =
+        \\ {"arg_1": "dummy"}
+    ;
+    const params = try CliParser(.{
+        .opts = Options,
+    }).loadFromJson(json_string, std.testing.allocator);
+    try std.testing.expectEqualStrings("dummy", params.options.arg_1.?);
 }
