@@ -711,14 +711,29 @@ pub fn CliParser(comptime ctx: CliContext) type {
         pub fn parse(arg_it: anytype, error_payload: ?*ParamErrPayload) CliError!Self {
             var params: Self = undefined;
             try params.parseInternal(arg_it, error_payload, null);
+            if (params.builtin.use_file) |fpath| {
+                // we have to save the cli_name so we have to reparse
+                const cli_name = params.builtin.cli_name;
+                var parsed = Self.loadFromJsonFile(fpath, std.heap.page_allocator) catch {
+                    return CliError.InvalidJSON;
+                };
+                parsed.builtin.cli_name = parsed.builtin.cli_name orelse cli_name;
+                return parsed;
+            }
             return params;
         }
 
+        /// Loads the data from JSON file
+        /// WARNING: the JSON data will not be freed
+        /// Since this is specifcally meant for loading input variables
+        /// and thus is a one-time thing for the lifetime of the process,
+        /// it's fine to keep the file in memory forever- the OS will free this
+        /// memory anyway on exit.
+        /// If you want to manage this memory more closely, use `loadFromJsonè directly
         pub fn loadFromJsonFile(json_path: []const u8, allocator: Allocator) !Self {
             const file = try std.fs.cwd().openFile(json_path, .{});
             const reader = file.reader();
             const buffer = reader.readAllAlloc(allocator, 1 << 32) catch return CliError.FileTooBig;
-            defer allocator.free(buffer);
             return Self.loadFromJson(buffer, allocator);
         }
 
@@ -1047,6 +1062,7 @@ pub const BuiltinOptions = struct {
     log_level: ?std.log.Level = null,
     quiet: bool = false,
     palette: []const u8 = "default",
+    use_file: ?[]const u8 = null,
 };
 // pub const BuiltinParser = CliParser(.{ .options = BuiltinOptions });
 
