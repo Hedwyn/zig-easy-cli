@@ -332,6 +332,15 @@ pub inline fn getOptionInfo(opt_name: []const u8, options_info: []const OptionIn
     }
     return null;
 }
+
+pub inline fn getOptionInternalInfo(opt_name: []const u8, options_info: []const OptionInternalInfo) ?OptionInternalInfo {
+    inline for (options_info) |opt| {
+        if (std.mem.eql(u8, opt.name, opt_name)) {
+            return opt;
+        }
+    }
+    return null;
+}
 /// Extracts the option identified by `arg_name` from the list of options `args_info`
 pub inline fn getArgInfo(arg_name: []const u8, args_info: []const ArgInfo) ?ArgInfo {
     inline for (args_info) |arg| {
@@ -516,9 +525,11 @@ const CliContext = struct {
     args: ?type = null,
     opts_info: []const OptionInfo = &.{},
     args_info: []const ArgInfo = &.{},
+    builtin_info: []const OptionInternalInfo = &builtin_doc,
     name: ?[]const u8 = null,
     headline: ?[]const u8 = null,
     welcome_msg: ?[]const u8 = null,
+    show_builtin_help: bool = false,
 };
 
 const ParserType = *const fn (*anyopaque, arg_it: *ArgIterator, error_payload: ?*ParamErrPayload) CliError!void;
@@ -930,7 +941,9 @@ pub fn CliParser(comptime ctx: CliContext) type {
                 }
                 writer.write("\n");
             }
-            if (hasOptions()) {
+
+            const has_options = hasOptions() or ctx.show_builtin_help;
+            if (has_options) {
                 writer.richPrint(
                     "==== Options ====",
                     .Header2,
@@ -961,6 +974,22 @@ pub fn CliParser(comptime ctx: CliContext) type {
                         if (opt.help) |help| {
                             writer.print("    {s}\n", .{help});
                         }
+                    }
+                }
+                if (!ctx.show_builtin_help) return;
+                inline for (std.meta.fields(BuiltinOptions)) |field| {
+                    const opt_internal_info = getOptionInternalInfo(field.name, ctx.builtin_info).?;
+                    writer.richPrint(
+                        "--{s}: {s}",
+                        .Field,
+                        .{
+                            opt_internal_info.name,
+                            getTypeName(field.type),
+                        },
+                    );
+                    writer.write("\n");
+                    if (opt_internal_info.help) |help| {
+                        writer.print("    {s}\n", .{help});
                     }
                 }
             }
@@ -1064,7 +1093,15 @@ pub const BuiltinOptions = struct {
     palette: []const u8 = "default",
     use_file: ?[]const u8 = null,
 };
-// pub const BuiltinParser = CliParser(.{ .options = BuiltinOptions });
+
+const builtin_doc = [_]OptionInternalInfo{
+    .{ .name = "help", .help = "Shows this menu" },
+    .{ .name = "log_level", .help = "Sets the global log level for this application" },
+    .{ .name = "quiet", .help = "Turns off the CLI output" },
+    .{ .name = "palette", .help = "Which color palette to use, avaialble: clay|blueish|forest|christmas" },
+    .{ .name = "use_file", .help = "A JSON file  from which to Load the arguments and option values " },
+    .{ .name = "cli_name", .help = "The name of this tool ", .hidden = true },
+};
 
 // Basic test case that only uses options and does not require casting
 test "parse with string parameters only" {
