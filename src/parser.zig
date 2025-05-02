@@ -243,6 +243,66 @@ fn initDefaults(comptime T: type, container: *T) void {
     }
 }
 
+/// Builds a map mapping each parameter name of a struct to a boolean  stating
+/// whether the parameter is mandatory (=non-defaulted) or not
+fn buildRequiredParamsMap(comptime Params: Struct) std.StaticStringMap(bool) {
+    const KVType = struct { []const u8, bool };
+    const kv_pairs = comptime blk: {
+        var kv: [Params.fields.len]KVType = undefined;
+        for (0.., Params.fields) |i, field| {
+            kv[i] = .{ field.name, (field.default_value_ptr == null) };
+        }
+        break :blk kv;
+    };
+
+    return std.StaticStringMap(bool).initComptime(kv_pairs);
+}
+
+/// Rturns the number of required params in the passed struct
+/// Useful for comptme logic that needs to extract a static size
+/// required parameterd
+fn getRequiredParamsCount(comptime Params: Struct) usize {
+    var count: usize = 0;
+    for (Params.fields) |field| {
+        if (field.default_value_ptr == null) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+fn getRequiredParams(comptime Params: Struct) []const []const u8 {
+    const results = comptime blk: {
+        const len = getRequiredParamsCount(Params);
+        var results: [len][]const u8 = undefined;
+        var index: usize = 0;
+        for (Params.fields) |field| {
+            if (field.default_value_ptr == null) {
+                results[index] = field.name;
+                index += 1;
+            }
+        }
+        break :blk results;
+    };
+    return &results;
+}
+test "get required params" {
+    const TestStruct = struct { a: i32 = 0, b: f32, c: f32 = 0.0, d: i32 };
+    const required_params = getRequiredParams(@typeInfo(TestStruct).@"struct");
+    try std.testing.expectEqualStrings("b", required_params[0]);
+    try std.testing.expectEqualStrings("d", required_params[1]);
+    try std.testing.expectEqual(2, required_params.len);
+}
+
+test "mandatory params" {
+    const TestStruct = struct { a: i32 = 0, b: f32, c: f32 = 0.0, d: i32 };
+    const mandatory_params = buildRequiredParamsMap(@typeInfo(TestStruct).@"struct");
+    try std.testing.expectEqual(false, mandatory_params.get("a").?);
+    try std.testing.expectEqual(true, mandatory_params.get("b").?);
+    try std.testing.expectEqual(false, mandatory_params.get("c").?);
+    try std.testing.expectEqual(true, mandatory_params.get("d").?);
+}
+
 /// Container for error information
 /// allows displaying an more detailed and contextualized error message
 /// to the final user
@@ -584,6 +644,10 @@ pub fn CliParser(comptime ctx: CliContext) type {
         const name_to_flag_map = buildShortFlagMap(OptionSt.fields, ctx.opts_info, true);
         const options_info_map = buildOptionInfoMap(OptionSt.fields, ctx.opts_info);
 
+        //
+        const required_arg_count = getRequiredParamsCount(ArgSt);
+        const required_option_count = getRequiredParamsCount(OptionSt);
+
         pub fn runSubparser(
             self: *Self,
             cmd_name: []const u8,
@@ -791,6 +855,10 @@ pub fn CliParser(comptime ctx: CliContext) type {
             initDefaults(OptionT, &(self.options));
             initDefaults(ArgT, &(self.args));
             initDefaults(BuiltinOptions, &(self.builtin));
+
+            var arg_cnt: usize = 0;
+            var passed_args: [ArgSt.fields.len][]const u8 = undefined;
+
             var is_option: bool = false;
             var flag_type: ?FlagType = null;
             var current_arg_name: []const u8 = "";
@@ -818,6 +886,17 @@ pub fn CliParser(comptime ctx: CliContext) type {
                         try self.runSubparser(current_arg_name, arg, arg_it, error_payload);
                         continue;
                     }
+                    if (arg_cnt > ArgSt.fields.len) {
+                        return CliError.TooManyArguments;
+                    }
+                    // Note: below condition is monkey-patch for compiler that has special condition
+                    // for array of size 0...
+                    // it cannot find out that the if statement above statically makes that case impossible
+                    if (ArgSt.fields.len > 0) {
+                        passed_args[arg_cnt] = current_arg_name;
+                    }
+                    arg_cnt += 1;
+
                     self.parseArg(
                         current_arg_name,
                         arg,
@@ -888,6 +967,29 @@ pub fn CliParser(comptime ctx: CliContext) type {
                             try self.parseFlag(current_arg_name);
                         }
                     },
+                }
+            }
+            if (!self.builtin.help) {
+                try checkMandatoryArgsPresence(&passed_args, error_payload);
+            }
+        }
+
+        pub fn checkMandatoryArgsPresence(passed_args: [][]const u8, err_payload: ?*ParamErrPayload) CliError!void {
+            const required_args = comptime getRequiredParams(ArgSt);
+            inline for (required_args) |required| {
+                var found = false;
+                for (passed_args) |received| {
+                    if (std.mem.eql(u8, required, received)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    if (err_payload) |payload| {
+                        payload.field_name = required;
+                        payload.value_str = required;
+                    }
+                    return CliError.MissingArgument;
                 }
             }
         }
@@ -1020,6 +1122,12 @@ pub fn CliParser(comptime ctx: CliContext) type {
             return false;
         }
 
+        /// Default entrypoint as an average user, a standalone runner
+        /// parsing arguments from stdin and handling any built-in interaction.
+        /// Returns the parsed parameters if the program should keep going
+        /// and null if not, which corresponds the following case:
+        /// * User request manual (--help) -> this function will print the manual
+        /// * Input is incorrect -> this function will report the error
         pub fn runStandalone() !?Self {
             comptime argSanityCheck(ArgSt.fields);
             var args_it = std.process.args();
