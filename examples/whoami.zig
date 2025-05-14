@@ -11,7 +11,7 @@ const DemoOptions = struct {
 };
 const DemoArgs = struct { name: ?[]const u8 };
 
-const options_doc = [_]OptionInfo{
+pub const options_doc = [_]OptionInfo{
     .{ .name = "surname", .help = "Your surname" },
 };
 
@@ -19,16 +19,17 @@ const arg_doc = [_]ArgInfo{
     .{ .name = "name", .help = "Your name" },
 };
 
+pub const ParserT = easycli.CliParser(.{
+    .opts = DemoOptions,
+    .args = DemoArgs,
+    .opts_info = &options_doc,
+    .args_info = &arg_doc,
+    .welcome_msg =
+    \\Pass your identity, the program will echo it for you.
+    ,
+});
+
 pub fn main() !void {
-    const ParserT = easycli.CliParser(.{
-        .opts = DemoOptions,
-        .args = DemoArgs,
-        .opts_info = &options_doc,
-        .args_info = &arg_doc,
-        .welcome_msg =
-        \\Pass your identity, the program will echo it for you.
-        ,
-    });
     const params = if (try ParserT.runStandalone()) |p| p else return;
 
     const name = if (params.args.name) |n| n else {
