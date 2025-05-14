@@ -934,12 +934,14 @@ pub fn CliParser(comptime ctx: CliContext) type {
             return false;
         }
 
-        pub fn runStandalone() !?Self {
+        pub fn runStandaloneWithOptions(
+            custom_arg_it: anytype,
+            custom_writer: ?Writer,
+        ) !?Self {
             comptime argSanityCheck(ArgSt.fields);
-            var args_it = std.process.args();
             var err_payload: ParamErrPayload = .{};
-            const writer = std.io.getStdOut().writer();
-            var params = Self.parse(&args_it, &err_payload) catch |e| {
+            const writer = custom_writer orelse std.io.getStdOut().writer();
+            var params = Self.parse(custom_arg_it, &err_payload) catch |e| {
                 displayError(e, err_payload, &writer);
                 return null;
             };
@@ -960,6 +962,10 @@ pub fn CliParser(comptime ctx: CliContext) type {
                 global_level = level;
             }
             return params;
+        }
+        pub fn runStandalone() !?Self {
+            var it = std.process.args();
+            return runStandaloneWithOptions(&it, null);
         }
 
         /// Shows an error to the end user
