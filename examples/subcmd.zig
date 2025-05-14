@@ -59,10 +59,11 @@ pub fn handleWhoami(params: anytype) void {
     }
 }
 
+pub const ParserT = easycli.CliParser(.{
+    .args = MainArg,
+});
+
 pub fn main() !void {
-    const ParserT = easycli.CliParser(.{
-        .args = MainArg,
-    });
     const main_params = if (try ParserT.runStandalone()) |p| p else return;
 
     const params = switch (main_params.args.subcmd) {

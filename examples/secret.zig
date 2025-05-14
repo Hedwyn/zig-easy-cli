@@ -17,16 +17,17 @@ const arg_doc = [_]ArgInfo{
     .{ .name = "name", .help = "A mysterious username" },
 };
 
+pub const ParserT = easycli.CliParser(.{
+    .opts = DemoOptions,
+    .args = DemoArgs,
+    .opts_info = &options_doc,
+    .args_info = &arg_doc,
+    .welcome_msg =
+    \\A mysterious program... what does it do ?
+    ,
+});
+
 pub fn main() !void {
-    const ParserT = easycli.CliParser(.{
-        .opts = DemoOptions,
-        .args = DemoArgs,
-        .opts_info = &options_doc,
-        .args_info = &arg_doc,
-        .welcome_msg =
-        \\A mysterious program... what does it do ?
-        ,
-    });
     const params = if (try ParserT.runStandalone()) |p| p else return;
 
     const username = params.args.username orelse {

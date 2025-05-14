@@ -26,13 +26,14 @@ pub const std_options = std.Options{
     .logFn = easycli.logHandler,
 };
 
+pub const ParserT = easycli.CliParser(.{
+    .opts = LogDemoOptions,
+    .args = LogDemoArgs,
+    .opts_info = &options_doc,
+    .args_info = &arg_doc,
+});
+
 pub fn main() !void {
-    const ParserT = easycli.CliParser(.{
-        .opts = LogDemoOptions,
-        .args = LogDemoArgs,
-        .opts_info = &options_doc,
-        .args_info = &arg_doc,
-    });
     const params = if (try ParserT.runStandalone()) |p| p else return;
 
     // Some dummy log records...
