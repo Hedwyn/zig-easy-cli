@@ -6,18 +6,29 @@ const ArgInfo = easycli.ArgInfo;
 
 // importing examples
 const whoami = @import("whoami.zig");
-// TODO: other ones
+const subcmd = @import("subcmd.zig");
+const logs = @import("logs.zig");
+const secret = @import("secret.zig");
+const minimal = @import("minimal.zig");
 
 /// Imports the CliParser object under test for the given example
 pub fn getCliParser(comptime example: Example) type {
     return switch (example) {
         .whoami => whoami.ParserT,
+        .subcmd => subcmd.ParserT,
+        .logs => logs.ParserT,
+        .secret => secret.ParserT,
+        .minimal => minimal.ParserT,
     };
 }
 
 /// All the examples under test
 const Example = enum {
     whoami,
+    subcmd,
+    logs,
+    secret,
+    minimal,
 
     pub fn all() []const Example {
         const examples = comptime blk: {
@@ -71,7 +82,7 @@ pub fn takeSnapshot(options: SnapshotOptions) void {
             is_target = (example == target);
         }
         if (is_target) {
-            std.debug.print("Taking snapshot of {s}!\n", .{@tagName(target)});
+            std.debug.print("Taking snapshot of {s}\n", .{@tagName(target)});
             var buf: [50]u8 = undefined;
             const output_name = std.fmt.bufPrint(&buf, "{s}_snapshot.txt", .{@tagName(target)}) catch unreachable;
             takeExampleSnapshot(target, output_name) catch unreachable;
