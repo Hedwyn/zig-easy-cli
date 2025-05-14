@@ -194,7 +194,7 @@ pub fn formatDefaultValue(comptime T: type, comptime default_value: *const anyop
         .optional => {
             if (default != null) {
                 @compileError(
-                    \\Optional fields are only allowed to have null as default value, 
+                    \\Optional fields are only allowed to have null as default value,
                     \\ as default values other than null will never be applied
                 );
             }
@@ -1122,18 +1122,14 @@ pub fn CliParser(comptime ctx: CliContext) type {
             return false;
         }
 
-        /// Default entrypoint as an average user, a standalone runner
-        /// parsing arguments from stdin and handling any built-in interaction.
-        /// Returns the parsed parameters if the program should keep going
-        /// and null if not, which corresponds the following case:
-        /// * User request manual (--help) -> this function will print the manual
-        /// * Input is incorrect -> this function will report the error
-        pub fn runStandalone() !?Self {
+        pub fn runStandaloneWithOptions(
+            custom_arg_it: anytype,
+            custom_writer: ?Writer,
+        ) !?Self {
             comptime argSanityCheck(ArgSt.fields);
-            var args_it = std.process.args();
             var err_payload: ParamErrPayload = .{};
-            const writer = std.io.getStdOut().writer();
-            var params = Self.parse(&args_it, &err_payload) catch |e| {
+            const writer = custom_writer orelse std.io.getStdOut().writer();
+            var params = Self.parse(custom_arg_it, &err_payload) catch |e| {
                 displayError(e, err_payload, &writer);
                 return null;
             };
@@ -1154,6 +1150,10 @@ pub fn CliParser(comptime ctx: CliContext) type {
                 global_level = level;
             }
             return params;
+        }
+        pub fn runStandalone() !?Self {
+            var it = std.process.args();
+            return runStandaloneWithOptions(&it, null);
         }
 
         /// Shows an error to the end user
