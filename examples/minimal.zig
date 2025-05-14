@@ -11,11 +11,12 @@ const DemoOptions = struct {
 };
 const DemoArgs = struct { name: ?[]const u8 };
 
+pub const ParserT = easycli.CliParser(.{
+    .opts = DemoOptions,
+    .args = DemoArgs,
+});
+
 pub fn main() !void {
-    const ParserT = easycli.CliParser(.{
-        .opts = DemoOptions,
-        .args = DemoArgs,
-    });
     const params = if (try ParserT.runStandalone()) |p| p else return;
 
     const name = if (params.args.name) |n| n else {
