@@ -43,6 +43,13 @@ const Example = enum {
     }
 };
 
+pub fn generatePrompts(comptime example: Example) []const []const u8 {
+    _ = example;
+    return &.{
+        "--help",
+    };
+}
+
 /// Parameters for the snapshot command
 const SnapshotOptions = struct {
     example: ?Example = null,
@@ -65,13 +72,28 @@ const MainArg = struct {
     subcmd: Subcommands,
 };
 
-fn takeExampleSnapshot(comptime example: Example, output_name: []const u8) !void {
+fn takeExampleSnapshot(comptime example: Example, output_name: []const u8, prompt: []const u8) !void {
     const out = try std.fs.cwd().createFile(output_name, .{});
     const writer = out.writer();
     const ParserT = comptime getCliParser(example);
-    const prompt = @tagName(example) ++ " --help";
     var arg_it = std.mem.splitSequence(u8, prompt, " ");
     _ = try ParserT.runStandaloneWithOptions(&arg_it, writer);
+}
+
+fn convertPromptToFilename(comptime prompt: []const u8) []const u8 {
+    const literal = comptime blk: {
+        var buf: [prompt.len]u8 = undefined;
+        for (0.., prompt) |i, char| {
+            const converted = switch (char) {
+                '-' => '_',
+                '_' => '-',
+                else => char,
+            };
+            buf[i] = converted;
+        }
+        break :blk buf;
+    };
+    return &literal;
 }
 
 pub fn takeSnapshot(options: SnapshotOptions) void {
@@ -83,10 +105,17 @@ pub fn takeSnapshot(options: SnapshotOptions) void {
         }
         if (is_target) {
             std.debug.print("Taking snapshot of {s}\n", .{@tagName(target)});
-            var buf: [50]u8 = undefined;
-            const output_name = std.fmt.bufPrint(&buf, "{s}_snapshot.txt", .{@tagName(target)}) catch unreachable;
-            takeExampleSnapshot(target, output_name) catch unreachable;
-            std.debug.print("Snapshot written at {s}\n", .{output_name});
+            inline for (comptime generatePrompts(target)) |prompt| {
+                var buf: [100]u8 = undefined;
+                const fname = convertPromptToFilename(prompt);
+                std.log.debug("Using filename {s}", .{fname});
+                const output_name = std.fmt.bufPrint(&buf, "examples/snapshots/{s}/{s}.txt", .{
+                    @tagName(target),
+                    fname,
+                }) catch unreachable;
+                takeExampleSnapshot(target, output_name, prompt) catch unreachable;
+                std.debug.print("Snapshot written at {s}\n", .{output_name});
+            }
         }
     }
     return;
