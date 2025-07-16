@@ -192,7 +192,7 @@ pub fn formatDefaultValue(comptime T: type, comptime default_value: *const anyop
         .optional => {
             if (default != null) {
                 @compileError(
-                    \\Optional fields are only allowed to have null as default value, 
+                    \\Optional fields are only allowed to have null as default value,
                     \\ as default values other than null will never be applied
                 );
             }
@@ -521,25 +521,29 @@ const CliContext = struct {
 
 const ParserType = *const fn (*anyopaque, arg_it: *ArgIterator, error_payload: ?*ParamErrPayload) CliError!void;
 
+pub fn getSubparserType(field_type: type) ?type {
+    return switch (@typeInfo(field_type)) {
+        .@"union" => field_type,
+        .optional => |opt| getSubparserType(opt.child),
+        else => null,
+    };
+}
+
+pub fn getSubparserFields(field_type: type) ?[]const UnionField{
+    return switch (@typeInfo(field_type)) {
+        .@"union" => |u| u.fields,
+        .optional => |opt| getSubparserFields(opt.child),
+        else => null,
+    };
+}
+
 /// Compile-time checks on argument fields
 /// Verifies that no more than one subcommand is defined
 pub fn argSanityCheck(arg_fields: []const StructField) void {
     var subcmd_count: usize = 0;
     inline for (arg_fields) |arg| {
-        switch (@typeInfo(arg.type)) {
-            .@"union" => |u| {
-                subcmd_count += 1;
-                inline for (u.fields) |field| {
-                    switch (@typeInfo(field.type)) {
-                        .@"struct" => {},
-                        else => @compileError("Subcommand option values should be CliParser(...) themselves"),
-                    }
-                    if (!@hasField(field.type, "args") or !@hasField(field.type, "options")) {
-                        @compileError("Subcommand option values should be CliParser(...) themselves");
-                    }
-                }
-            },
-            else => {},
+        if (getSubparserFields(arg.type)) |_| {
+            subcmd_count += 1;
         }
     }
     if (subcmd_count > 1) {
@@ -580,14 +584,11 @@ pub fn CliParser(comptime ctx: CliContext) type {
         ) CliError!void {
             inline for (ArgSt.fields) |arg| {
                 if (std.mem.eql(u8, cmd_name, arg.name)) {
-                    const fields = switch (@typeInfo(arg.type)) {
-                        .@"union" => |u| u.fields,
-                        else => return,
-                    };
+                    const fields = getSubparserFields(arg.type) orelse return;
                     inline for (fields) |f| {
                         if (std.mem.eql(u8, cmd_value, f.name)) {
-                            @field(self.args, arg.name) = @unionInit(arg.type, f.name, undefined);
-                            return try @field(@field(self.args, arg.name), f.name).parseInternal(
+                            @field(self.args, arg.name) = @unionInit(getSubparserType(arg.type).?, f.name, undefined);
+                            return try @field(@field(self.args, arg.name).?, f.name).parseInternal(
                                 arg_it,
                                 error_payload,
                                 self.builtin.cli_name,
@@ -602,9 +603,8 @@ pub fn CliParser(comptime ctx: CliContext) type {
         pub fn isSubcommand(cmd_name: []const u8) bool {
             inline for (ArgSt.fields) |arg| {
                 if (std.mem.eql(u8, cmd_name, arg.name)) {
-                    switch (@typeInfo(arg.type)) {
-                        .@"union" => return true,
-                        else => {},
+                    if (getSubparserFields(arg.type)) |_| {
+                        return true;
                     }
                 }
             }
@@ -910,7 +910,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
         }
 
         pub fn emitHelpRecursive(
-            self: *Self,
+            self: *const Self,
             writer: *const RichWriter,
         ) CliError!bool {
             if (self.builtin.help) {
@@ -918,17 +918,17 @@ pub fn CliParser(comptime ctx: CliContext) type {
                 return true;
             }
             inline for (ArgSt.fields) |arg| {
-                switch (@typeInfo(arg.type)) {
-                    .@"union" => {
-                        switch (@field(self.args, arg.name)) {
+                if (getSubparserFields(arg.type)) |_| {
+                    // if arg is subparser it is a union by design
+                    if (@field(self.args, arg.name)) |subparser| {
+                        switch (subparser) {
                             inline else => |*parser| {
                                 if (parser.builtin.help) {
                                     return try parser.emitHelpRecursive(writer);
                                 }
                             },
                         }
-                    },
-                    else => continue,
+                    }
                 }
             }
             return false;

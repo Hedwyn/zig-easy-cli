@@ -23,7 +23,7 @@ const Subcommands = union(enum) {
 };
 
 const MainArg = struct {
-    subcmd: Subcommands,
+    subcmd: ?Subcommands = null,
 };
 
 const options_doc = [_]OptionInfo{
@@ -65,8 +65,11 @@ pub const ParserT = easycli.CliParser(.{
 
 pub fn main() !void {
     const main_params = if (try ParserT.runStandalone()) |p| p else return;
-
-    const params = switch (main_params.args.subcmd) {
+    const subcmd = main_params.args.subcmd orelse {
+        std.debug.print("You must provide a subcommand !\n", .{});
+        return;
+    };
+    const params = switch (subcmd) {
         .whoami => |p| p,
     };
     handleWhoami(params);
