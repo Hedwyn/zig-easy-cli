@@ -21,6 +21,8 @@ const Style = styling.Style;
 
 const default_welcome_message = "Welcome to {s} !";
 
+const json_max_size = (1 << 16);
+
 var global_level: log.Level = .info;
 
 /// Set this function as your log handler if you want
@@ -808,7 +810,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
         pub fn loadFromJsonFile(json_path: []const u8, allocator: Allocator) !Self {
             const file = try std.fs.cwd().openFile(json_path, .{});
             const reader = file.reader();
-            const buffer = reader.readAllAlloc(allocator, 1 << 32) catch return CliError.FileTooBig;
+            const buffer = reader.readAllAlloc(allocator, json_max_size) catch return CliError.FileTooBig;
             return Self.loadFromJson(buffer, allocator);
         }
 
