@@ -996,7 +996,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
             }
         }
 
-        pub fn emitWelcomeMessage(self: Self, writer: *const RichWriter) !void {
+        pub fn emitWelcomeMessage(self: Self, T: type, writer: *const RichWriter(T)) !void {
             if (self.builtin.cli_name) |name| {
                 const headline = ctx.headline orelse default_welcome_message;
                 writer.richPrint(headline, Style.Header1, .{name});
@@ -1012,7 +1012,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
             , .{});
         }
 
-        pub fn emitHelp(self: Self, writer: *const RichWriter) !void {
+        pub fn emitHelp(self: Self, T: type, writer: *const RichWriter(T)) !void {
             writer.richPrint("===== Usage =====", .Header2, .{});
             // Showing typical usage
             writer.richPrint(">>> {s}", .Field, .{self.builtin.cli_name.?});
@@ -1101,10 +1101,11 @@ pub fn CliParser(comptime ctx: CliContext) type {
 
         pub fn emitHelpRecursive(
             self: *const Self,
-            writer: *const RichWriter,
+            T: type,
+            writer: *const RichWriter(T),
         ) CliError!bool {
             if (self.builtin.help) {
-                try self.emitHelp(writer);
+                try self.emitHelp(T, writer);
                 return true;
             }
             inline for (ArgSt.fields) |arg| {
@@ -1115,7 +1116,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
                         switch (subparser) {
                             inline else => |*parser| {
                                 if (parser.builtin.help) {
-                                    return try parser.emitHelpRecursive(writer);
+                                    return try parser.emitHelpRecursive(T, writer);
                                 }
                             },
                         }
@@ -1126,27 +1127,34 @@ pub fn CliParser(comptime ctx: CliContext) type {
         }
 
         pub fn runStandaloneWithOptions(
+            T: type,
             custom_arg_it: anytype,
-            custom_writer: ?Writer,
+            custom_writer: T,
         ) !?Self {
             comptime argSanityCheck(ArgSt.fields);
             var err_payload: ParamErrPayload = .{};
-            const writer = custom_writer orelse std.io.getStdOut().writer();
+            const use_custom_writer = switch (@typeInfo(@TypeOf(custom_writer))) {
+                    .null => false,
+                    .@"struct" => true, // Could check if actually a GenericWriter here
+                    else => @compileError("Expected null or GenericWriter type"),
+            };
+            const writer = if (use_custom_writer) custom_writer else std.io.getStdOut().writer();
+
             var params = Self.parse(custom_arg_it, &err_payload) catch |e| {
-                displayError(e, err_payload, &writer);
+                displayError(@TypeOf(writer), e, err_payload, &writer);
                 return null;
             };
             const user_palette = styling.palettes.get(params.builtin.palette) orelse {
                 err_payload.field_name = "palette";
                 err_payload.value_str = params.builtin.palette;
-                displayError(CliError.UnknownPalette, err_payload, &writer);
+                displayError(@TypeOf(writer), CliError.UnknownPalette, err_payload, &writer);
                 return null;
             };
-            const rich_writer = RichWriter{ .writer = &writer, .palette = user_palette };
+            const rich_writer = RichWriter(@TypeOf(writer)){ .writer = &writer, .palette = user_palette };
             std.debug.assert(params.builtin.cli_name != null);
             if (!params.builtin.quiet) {
-                try params.emitWelcomeMessage(&rich_writer);
-                if (try params.emitHelpRecursive(&rich_writer)) return null;
+                try params.emitWelcomeMessage(@TypeOf(writer), &rich_writer);
+                if (try params.emitHelpRecursive(@TypeOf(writer), &rich_writer)) return null;
             }
             // handling logs
             if (params.builtin.log_level) |level| {
@@ -1156,12 +1164,12 @@ pub fn CliParser(comptime ctx: CliContext) type {
         }
         pub fn runStandalone() !?Self {
             var it = std.process.args();
-            return runStandaloneWithOptions(&it, null);
+            return runStandaloneWithOptions(@TypeOf(null), &it, null);
         }
 
         /// Shows an error to the end user
-        pub fn displayError(err: CliError, err_payload: ParamErrPayload, writer: *const Writer) void {
-            const rich = RichWriter{ .writer = writer };
+        pub fn displayError(T: type, err: CliError, err_payload: ParamErrPayload, writer: *const T) void {
+            const rich = RichWriter(T){ .writer = writer };
             switch (err) {
                 ParameterError.MissingArgument => {
                     const param_name = err_payload.get_field_name();

@@ -11,6 +11,9 @@ const logs = @import("logs.zig");
 const secret = @import("secret.zig");
 const minimal = @import("minimal.zig");
 
+// Compile time static limit on expected cmd size output
+const cmd_output_max_size = 1000;
+
 /// Imports the CliParser object under test for the given example
 pub fn getCliParser(comptime example: Example) type {
     return switch (example) {
@@ -43,6 +46,26 @@ const Example = enum {
     }
 };
 
+const BufferWriterError = error {BufferFull};
+const BufContext = struct {buf: []u8, cursor: usize = 0};
+
+pub fn writeToBuf(ctx: BufContext, bytes : []const u8) BufferWriterError!usize {
+    const next_cursor = ctx.cursor + bytes.len;
+    if (next_cursor > ctx.buf.len) {
+        return BufferWriterError.BufferFull;
+    }
+    for (0.., bytes) |i, byte| {
+        ctx.buf[ctx.cursor + i] = byte;
+    }
+    ctx.cursor = next_cursor;
+    return bytes.len;
+}
+const BufferWriter = std.io.GenericWriter(BufContext, BufferWriterError, writeToBuf);
+
+pub fn getBufferWriter(buf: []u8) BufferWriter {
+    return .{.context = .{.buf = buf}};
+}
+
 pub fn generatePrompts(comptime example: Example) []const []const u8 {
     _ = example;
     return &.{
@@ -55,15 +78,25 @@ const SnapshotOptions = struct {
     example: ?Example = null,
 };
 
-const snapshot_option_docs = [_]OptionInfo{
+const take_snapshot_doc = [_]OptionInfo{
     .{ .name = "example", .help = "Name of the example to take a snapshot from" },
+};
+
+const test_snapshot_doc = [_]OptionInfo{
+    .{ .name = "example", .help = "Name of the example from which snapshots should be tested" },
 };
 
 const Subcommands = union(enum) {
     take_snapshot: easycli.CliParser(
         .{
             .opts = SnapshotOptions,
-            .opts_info = &snapshot_option_docs,
+            .opts_info = &take_snapshot_doc,
+        },
+    ),
+    test_snapshots: easycli.CliParser(
+        .{
+            .opts = SnapshotOptions,
+            .opts_info = &test_snapshot_doc,
         },
     ),
 };
@@ -77,7 +110,17 @@ fn takeExampleSnapshot(comptime example: Example, output_name: []const u8, promp
     const writer = out.writer();
     const ParserT = comptime getCliParser(example);
     var arg_it = std.mem.splitSequence(u8, prompt, " ");
-    _ = try ParserT.runStandaloneWithOptions(&arg_it, writer);
+    _ = try ParserT.runStandaloneWithOptions(std.fs.File.Writer, &arg_it, writer);
+}
+
+
+fn testExampleSnapshot(comptime example: Example, prompt: []const u8, expected: []const u8) !void {
+    var buf: [cmd_output_max_size]u8 = undefined;
+    const writer = getBufferWriter(&buf);
+    const ParserT = comptime getCliParser(example);
+    var arg_it = std.mem.splitSequence(u8, prompt, " ");
+    _ = try ParserT.runStandaloneWithOptions(BufferWriter, &arg_it, writer);
+    _ = expected;
 }
 
 fn convertPromptToFilename(comptime prompt: []const u8) []const u8 {
@@ -121,6 +164,31 @@ pub fn takeSnapshot(options: SnapshotOptions) void {
     return;
 }
 
+pub fn testSnapshot(options: SnapshotOptions) void {
+    inline for (std.meta.fields(Example)) |field| {
+        const target: Example = @enumFromInt(field.value);
+        var is_target: bool = true;
+        if (options.example) |example| {
+            is_target = (example == target);
+        }
+        if (is_target) {
+            std.debug.print("Testing snapshot of {s}\n", .{@tagName(target)});
+            inline for (comptime generatePrompts(target)) |prompt| {
+                var buf: [100]u8 = undefined;
+                const fname = convertPromptToFilename(prompt);
+                std.log.debug("Using filename {s}", .{fname});
+                const snapshot_path = std.fmt.bufPrint(&buf, "examples/snapshots/{s}/{s}.txt", .{
+                    @tagName(target),
+                    fname,
+                }) catch unreachable;
+
+                testExampleSnapshot(target, snapshot_path, prompt) catch unreachable;
+            }
+        }
+    }
+    return;
+}
+
 pub fn main() !void {
     const ParserT = easycli.CliParser(.{
         .args = MainArg,
@@ -132,5 +200,7 @@ pub fn main() !void {
     };
     switch (cmd) {
         .take_snapshot => |p| takeSnapshot(p.options),
+        .test_snapshots => |_| unreachable,
+
     }
 }
