@@ -273,11 +273,11 @@ const Subcommands = union(enum) {
 };
 
 const MainArg = struct {
-    subcmd: Subcommands,
+    subcmd: ?Subcommands = null,
 };
 ```
 
-Note that subcommands is the **only** valid use of Tagged Unions as field for the parser. Using anything that's not a `CliParser(...)` type as variant type will raise a compile-time error.
+Note that subcommands is the **only** valid use of Tagged Unions as field for the parser. They must be wrapped with Optional, to get defined behavior when the user forgets to pass the subcommand. Using anything that's not a `CliParser(...)` type as variant type will raise a compile-time error.
 
 # Comparison with existing projects for CLI tools
 There are a few other CLI libraries for zig out there.
