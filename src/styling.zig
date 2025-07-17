@@ -172,7 +172,7 @@ pub const Style = enum {
 pub fn RichWriter(GenericWriter: type) type {
     return struct {
         writer: *const GenericWriter,
-        on_error: ?(*const fn (WriteError) void) = null,
+        on_error: ?(*const fn (GenericWriter.Error) void) = null,
         palette: std.StaticStringMap(StyleOptions) = default_palette,
         const Self = @This();
 

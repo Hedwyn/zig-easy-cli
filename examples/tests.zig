@@ -49,7 +49,7 @@ const Example = enum {
 const BufferWriterError = error {BufferFull};
 const BufContext = struct {buf: []u8, cursor: usize = 0};
 
-pub fn writeToBuf(ctx: BufContext, bytes : []const u8) BufferWriterError!usize {
+pub fn writeToBuf(ctx: *BufContext, bytes : []const u8) BufferWriterError!usize {
     const next_cursor = ctx.cursor + bytes.len;
     if (next_cursor > ctx.buf.len) {
         return BufferWriterError.BufferFull;
@@ -60,11 +60,7 @@ pub fn writeToBuf(ctx: BufContext, bytes : []const u8) BufferWriterError!usize {
     ctx.cursor = next_cursor;
     return bytes.len;
 }
-const BufferWriter = std.io.GenericWriter(BufContext, BufferWriterError, writeToBuf);
-
-pub fn getBufferWriter(buf: []u8) BufferWriter {
-    return .{.context = .{.buf = buf}};
-}
+const BufferWriter = std.io.GenericWriter(*BufContext, BufferWriterError, writeToBuf);
 
 pub fn generatePrompts(comptime example: Example) []const []const u8 {
     _ = example;
@@ -115,12 +111,17 @@ fn takeExampleSnapshot(comptime example: Example, output_name: []const u8, promp
 
 
 fn testExampleSnapshot(comptime example: Example, prompt: []const u8, expected: []const u8) !void {
-    var buf: [cmd_output_max_size]u8 = undefined;
-    const writer = getBufferWriter(&buf);
+    var buf = [_]u8{0} ** cmd_output_max_size;
+    var buf_ctx: BufContext = .{.buf = &buf};
+    const writer: BufferWriter = .{.context = &buf_ctx};
     const ParserT = comptime getCliParser(example);
     var arg_it = std.mem.splitSequence(u8, prompt, " ");
     _ = try ParserT.runStandaloneWithOptions(BufferWriter, &arg_it, writer);
-    _ = expected;
+    // TODO: fix
+    // std.debug.assert(buf_ctx.cursor == expected.len);
+    // for (0..buf_ctx.cursor) |i| {
+    //     std.debug.assert(buf[i] == expected[i]);
+    // }
 }
 
 fn convertPromptToFilename(comptime prompt: []const u8) []const u8 {
@@ -174,15 +175,16 @@ pub fn testSnapshot(options: SnapshotOptions) void {
         if (is_target) {
             std.debug.print("Testing snapshot of {s}\n", .{@tagName(target)});
             inline for (comptime generatePrompts(target)) |prompt| {
-                var buf: [100]u8 = undefined;
+                var fname_buf: [100]u8 = undefined;
+                var fcontent_buf: [cmd_output_max_size]u8 = undefined;
                 const fname = convertPromptToFilename(prompt);
                 std.log.debug("Using filename {s}", .{fname});
-                const snapshot_path = std.fmt.bufPrint(&buf, "examples/snapshots/{s}/{s}.txt", .{
+                const snapshot_path = std.fmt.bufPrint(&fname_buf, "examples/snapshots/{s}/{s}.txt", .{
                     @tagName(target),
                     fname,
                 }) catch unreachable;
-
-                testExampleSnapshot(target, snapshot_path, prompt) catch unreachable;
+                const expected = std.fs.cwd().readFile(snapshot_path, &fcontent_buf) catch unreachable;
+                testExampleSnapshot(target, snapshot_path, expected) catch unreachable;
             }
         }
     }
@@ -200,7 +202,7 @@ pub fn main() !void {
     };
     switch (cmd) {
         .take_snapshot => |p| takeSnapshot(p.options),
-        .test_snapshots => |_| unreachable,
+        .test_snapshots => |p| testSnapshot(p.options),
 
     }
 }
