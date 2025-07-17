@@ -69,7 +69,7 @@ const Subcommands = union(enum) {
 };
 
 const MainArg = struct {
-    subcmd: Subcommands,
+    subcmd: ?Subcommands = null,
 };
 
 fn takeExampleSnapshot(comptime example: Example, output_name: []const u8, prompt: []const u8) !void {
@@ -126,7 +126,11 @@ pub fn main() !void {
         .args = MainArg,
     });
     const main_params = if (try ParserT.runStandalone()) |p| p else return;
-    switch (main_params.args.subcmd) {
+    const cmd = main_params.args.subcmd orelse {
+        std.debug.print("You must provide a subcommand !", .{});
+        return;
+    };
+    switch (cmd) {
         .take_snapshot => |p| takeSnapshot(p.options),
     }
 }

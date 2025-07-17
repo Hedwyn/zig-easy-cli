@@ -1110,6 +1110,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
             inline for (ArgSt.fields) |arg| {
                 if (getSubparserFields(arg.type)) |_| {
                     // if arg is subparser it is a union by design
+                    // TODO: fix for case of non-optional subcommands
                     if (@field(self.args, arg.name)) |subparser| {
                         switch (subparser) {
                             inline else => |*parser| {
