@@ -169,84 +169,81 @@ pub const Style = enum {
     }
 };
 
-pub fn RichWriter(GenericWriter: type) type {
-    return struct {
-        writer: *const GenericWriter,
-        on_error: ?(*const fn (GenericWriter.Error) void) = null,
-        palette: std.StaticStringMap(StyleOptions) = default_palette,
-        const Self = @This();
+pub const RichWriter = struct {
+    writer: *std.Io.Writer,
+    on_error: ?(*const fn (anyerror) void) = null,
+    palette: std.StaticStringMap(StyleOptions) = default_palette,
 
-        pub fn write(self: Self, bytes: []const u8) void {
-            _ = self.writer.write(bytes) catch |err| {
-                if (self.on_error) |handler| {
-                    handler(err);
-                } else panic("Writer {} failed to write {s}, no error handler defined\n", .{ self, bytes });
-            };
-        }
+    pub fn write(self: RichWriter, bytes: []const u8) void {
+        _ = self.writer.write(bytes) catch |err| {
+            if (self.on_error) |handler| {
+                handler(err);
+            } else panic("Writer {} failed to write {s}, no error handler defined\n", .{ self, bytes });
+        };
+    }
 
-        pub fn print(self: Self, comptime format: []const u8, args: anytype) void {
-            _ = self.writer.print(format, args) catch |err| {
-                if (self.on_error) |handler| {
-                    handler(err);
-                } else panic("Writer {} failed to print {s} with arguments {any}, no error handler defined\n", .{
-                    self,
-                    format,
-                    args,
-                });
-            };
-        }
+    pub fn print(self: RichWriter, comptime format: []const u8, args: anytype) void {
+        _ = self.writer.print(format, args) catch |err| {
+            if (self.on_error) |handler| {
+                handler(err);
+            } else panic("Writer {} failed to print {s} with arguments {any}, no error handler defined\n", .{
+                self,
+                format,
+                args,
+            });
+        };
+    }
 
-        pub fn styledPrint(
-            self: Self,
-            comptime format: []const u8,
-            options: StyleOptions,
-            args: anytype,
-        ) void {
-            if (options.bold) {
-                self.write(bold);
-            }
-            if (options.italic) {
-                self.write(italic);
-            }
-            if (options.dim) {
-                self.write(dim);
-            }
-            self.write(options.getBackgroundColor());
-            self.write(options.getTextColor());
-            if (options.framed) {
-                printFramedText(GenericWriter, self.writer, options.frame_params orelse .{}, format, args) catch unreachable;
-            } else {
-                self.print(format, args);
-            }
-            self.write(reset);
-            for (0..options.line_breaks) |_| {
-                self.write("\n");
-            }
+    pub fn styledPrint(
+        self: RichWriter,
+        comptime format: []const u8,
+        options: StyleOptions,
+        args: anytype,
+    ) void {
+        if (options.bold) {
+            self.write(bold);
         }
+        if (options.italic) {
+            self.write(italic);
+        }
+        if (options.dim) {
+            self.write(dim);
+        }
+        self.write(options.getBackgroundColor());
+        self.write(options.getTextColor());
+        if (options.framed) {
+            printFramedText(self.writer, options.frame_params orelse .{}, format, args) catch unreachable;
+        } else {
+            self.print(format, args);
+        }
+        self.write(reset);
+        for (0..options.line_breaks) |_| {
+            self.write("\n");
+        }
+    }
 
-        pub fn richPrint(self: Self, comptime format: []const u8, style: Style, args: anytype) void {
-            if (style.lookupStyle(self.palette)) |options| {
-                self.styledPrint(format, options, args);
-            } else {
-                panic("Style variant not declared in Palette: {any}", .{style});
-            }
+    pub fn richPrint(self: RichWriter, comptime format: []const u8, style: Style, args: anytype) void {
+        if (style.lookupStyle(self.palette)) |options| {
+            self.styledPrint(format, options, args);
+        } else {
+            panic("Style variant not declared in Palette: {any}", .{style});
         }
-    };
-}
+    }
+};
 
 const CellContent = union(enum) { frame, pad, text: usize };
 
 const max_terminal_size = 100 * 100;
 
-pub fn printFramedText(T: type, writer: *const T, parameters: FrameParameters, comptime format: []const u8, args: anytype) !void {
+pub fn printFramedText(writer: *std.Io.Writer, parameters: FrameParameters, comptime format: []const u8, args: anytype) !void {
     var buf: [max_terminal_size]u8 = undefined;
     const text = std.fmt.bufPrint(&buf, format, args) catch {
         panic("Configured max terminal size is unsufficient", .{});
     };
-    try writeFramedText(T, writer, text, parameters);
+    try writeFramedText(writer, text, parameters);
 }
 
-pub fn writeFramedText(T: type, writer: *const T, text: []const u8, parameters: FrameParameters) !void {
+pub fn writeFramedText(writer: *std.Io.Writer, text: []const u8, parameters: FrameParameters) !void {
     const char = parameters.char;
     const horizontal_pad = parameters.horizontal_pad;
     const vertical_pad = parameters.vertical_pad;

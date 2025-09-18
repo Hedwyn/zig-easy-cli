@@ -23,30 +23,26 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const lib = b.addStaticLibrary(.{
-        .name = "zig-easy-cli",
-        // In this case the main source file is merely a path, however, in more
-        // complicated build scripts, this could be a generated file.
+    const mod = b.addModule("zig-easy-cli", .{
         .root_source_file = b.path("src/parser.zig"),
         .target = target,
-        .optimize = optimize,
     });
     const parser_module = b.addModule("parser", .{ .root_source_file = b.path("src/parser.zig") });
     const styling_module = b.addModule("styling", .{ .root_source_file = b.path("src/styling.zig") });
-
-    // This declares intent for the library to be installed into the standard
-    // location when the user invokes the "install" step (the default step when
-    // running `zig build`).
-    b.installArtifact(lib);
 
     const examples_step = b.step("examples", "Run examples");
 
     inline for (examples) |example_name| {
         const example = b.addExecutable(.{
             .name = example_name,
-            .root_source_file = b.path("examples/" ++ example_name ++ ".zig"),
-            .target = target,
-            .optimize = optimize,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/" ++ example_name ++ ".zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "zig-easy-cli", .module = mod },
+                },
+            }),
         });
         example.root_module.addImport("parser", parser_module);
         example.root_module.addImport("styling", styling_module);
@@ -62,13 +58,11 @@ pub fn build(b: *std.Build) void {
 
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
-    const lib_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/parser.zig"),
-        .target = target,
-        .optimize = optimize,
+    const mod_tests = b.addTest(.{
+        .root_module = mod,
     });
 
-    const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
+    const run_lib_unit_tests = b.addRunArtifact(mod_tests);
 
     // Similar to creating the run step earlier, this exposes a `test` step to
     // the `zig build --help` menu, providing a way for the user to request

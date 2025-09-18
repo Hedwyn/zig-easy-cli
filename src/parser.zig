@@ -237,7 +237,7 @@ fn initDefaults(comptime T: type, container: *T) void {
             .optional => @field(container, field.name) = null,
             else => {
                 if (field.default_value_ptr) |ptr| {
-                    const value_ptr = @as(*field.type, @ptrCast(@constCast(@alignCast(ptr))));
+                    const value_ptr = @as(*field.type, @ptrCast(@alignCast(@constCast(ptr))));
                     @field(container, field.name) = value_ptr.*;
                 }
             },
@@ -604,7 +604,7 @@ pub fn getSubparserType(field_type: type) ?type {
     };
 }
 
-pub fn getSubparserFields(field_type: type) ?[]const UnionField{
+pub fn getSubparserFields(field_type: type) ?[]const UnionField {
     return switch (@typeInfo(field_type)) {
         .@"union" => |u| u.fields,
         .optional => |opt| getSubparserFields(opt.child),
@@ -806,11 +806,12 @@ pub fn CliParser(comptime ctx: CliContext) type {
         /// and thus is a one-time thing for the lifetime of the process,
         /// it's fine to keep the file in memory forever- the OS will free this
         /// memory anyway on exit.
-        /// If you want to manage this memory more closely, use `loadFromJsonè directly
+        /// If you want to manage this memory more closely, use `loadFromJson` directly
         pub fn loadFromJsonFile(json_path: []const u8, allocator: Allocator) !Self {
             const file = try std.fs.cwd().openFile(json_path, .{});
-            const reader = file.reader();
-            const buffer = reader.readAllAlloc(allocator, json_max_size) catch return CliError.FileTooBig;
+            var buf: [1024]u8 = undefined;
+            var reader = file.reader(&buf);
+            const buffer = reader.interface.readAlloc(allocator, json_max_size) catch return CliError.FileTooBig;
             return Self.loadFromJson(buffer, allocator);
         }
 
@@ -996,7 +997,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
             }
         }
 
-        pub fn emitWelcomeMessage(self: Self, T: type, writer: *const RichWriter(T)) !void {
+        pub fn emitWelcomeMessage(self: Self, writer: *RichWriter) !void {
             if (self.builtin.cli_name) |name| {
                 const headline = ctx.headline orelse default_welcome_message;
                 writer.richPrint(headline, Style.Header1, .{name});
@@ -1012,7 +1013,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
             , .{});
         }
 
-        pub fn emitHelp(self: Self, T: type, writer: *const RichWriter(T)) !void {
+        pub fn emitHelp(self: Self, writer: *RichWriter) !void {
             writer.richPrint("===== Usage =====", .Header2, .{});
             // Showing typical usage
             writer.richPrint(">>> {s}", .Field, .{self.builtin.cli_name.?});
@@ -1101,11 +1102,10 @@ pub fn CliParser(comptime ctx: CliContext) type {
 
         pub fn emitHelpRecursive(
             self: *const Self,
-            T: type,
-            writer: *const RichWriter(T),
+            writer: *RichWriter,
         ) CliError!bool {
             if (self.builtin.help) {
-                try self.emitHelp(T, writer);
+                try self.emitHelp(writer);
                 return true;
             }
             inline for (ArgSt.fields) |arg| {
@@ -1116,7 +1116,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
                         switch (subparser) {
                             inline else => |*parser| {
                                 if (parser.builtin.help) {
-                                    return try parser.emitHelpRecursive(T, writer);
+                                    return try parser.emitHelpRecursive(writer);
                                 }
                             },
                         }
@@ -1127,34 +1127,30 @@ pub fn CliParser(comptime ctx: CliContext) type {
         }
 
         pub fn runStandaloneWithOptions(
-            T: type,
             custom_arg_it: anytype,
-            custom_writer: T,
+            custom_writer: ?*std.Io.Writer,
         ) !?Self {
             comptime argSanityCheck(ArgSt.fields);
             var err_payload: ParamErrPayload = .{};
-            const use_custom_writer = switch (@typeInfo(@TypeOf(custom_writer))) {
-                    .null => false,
-                    .@"struct" => true, // Could check if actually a GenericWriter here
-                    else => @compileError("Expected null or GenericWriter type"),
-            };
-            const writer = if (use_custom_writer) custom_writer else std.io.getStdOut().writer();
-
+            const writer: *std.Io.Writer = if (custom_writer) |w| w else @constCast(&std.fs.File.stdout().writer(&.{}).interface);
             var params = Self.parse(custom_arg_it, &err_payload) catch |e| {
-                displayError(@TypeOf(writer), e, err_payload, &writer);
+                displayError(e, err_payload, writer);
                 return null;
             };
             const user_palette = styling.palettes.get(params.builtin.palette) orelse {
                 err_payload.field_name = "palette";
                 err_payload.value_str = params.builtin.palette;
-                displayError(@TypeOf(writer), CliError.UnknownPalette, err_payload, &writer);
+                displayError(CliError.UnknownPalette, err_payload, writer);
                 return null;
             };
-            const rich_writer = RichWriter(@TypeOf(writer)){ .writer = &writer, .palette = user_palette };
+            var rich_writer = RichWriter{
+                .writer = writer,
+                .palette = user_palette,
+            };
             std.debug.assert(params.builtin.cli_name != null);
             if (!params.builtin.quiet) {
-                try params.emitWelcomeMessage(@TypeOf(writer), &rich_writer);
-                if (try params.emitHelpRecursive(@TypeOf(writer), &rich_writer)) return null;
+                try params.emitWelcomeMessage(&rich_writer);
+                if (try params.emitHelpRecursive(&rich_writer)) return null;
             }
             // handling logs
             if (params.builtin.log_level) |level| {
@@ -1164,12 +1160,12 @@ pub fn CliParser(comptime ctx: CliContext) type {
         }
         pub fn runStandalone() !?Self {
             var it = std.process.args();
-            return runStandaloneWithOptions(@TypeOf(null), &it, null);
+            return runStandaloneWithOptions(&it, null);
         }
 
         /// Shows an error to the end user
-        pub fn displayError(T: type, err: CliError, err_payload: ParamErrPayload, writer: *const T) void {
-            const rich = RichWriter(T){ .writer = writer };
+        pub fn displayError(err: CliError, err_payload: ParamErrPayload, writer: *std.io.Writer) void {
+            const rich = RichWriter{ .writer = writer };
             switch (err) {
                 ParameterError.MissingArgument => {
                     const param_name = err_payload.get_field_name();
