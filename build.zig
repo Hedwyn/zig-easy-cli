@@ -23,7 +23,7 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const mod =  b.addModule("zig-easy-cli", .{
+    const mod = b.addModule("zig-easy-cli", .{
         .root_source_file = b.path("src/parser.zig"),
         .target = target,
     });
@@ -35,12 +35,12 @@ pub fn build(b: *std.Build) void {
     inline for (examples) |example_name| {
         const example = b.addExecutable(.{
             .name = example_name,
-            .root_module=b.createModule(.{
+            .root_module = b.createModule(.{
                 .root_source_file = b.path("examples/" ++ example_name ++ ".zig"),
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
-                    .{.name= "zig-easy-cli", .module=mod},
+                    .{ .name = "zig-easy-cli", .module = mod },
                 },
             }),
         });
