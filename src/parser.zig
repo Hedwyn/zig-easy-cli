@@ -1132,9 +1132,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
         ) !?Self {
             comptime argSanityCheck(ArgSt.fields);
             var err_payload: ParamErrPayload = .{};
-            var stdout_buffer: [1024]u8 = undefined;
-            const writer: *std.Io.Writer = if (custom_writer) |w| w else @constCast(&std.fs.File.stdout().writer(&stdout_buffer).interface);
-
+            const writer: *std.Io.Writer = if (custom_writer) |w| w else @constCast(&std.fs.File.stdout().writer(&.{}).interface);
             var params = Self.parse(custom_arg_it, &err_payload) catch |e| {
                 displayError(e, err_payload, writer);
                 return null;
