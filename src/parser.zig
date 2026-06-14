@@ -29,7 +29,7 @@ var global_level: log.Level = .info;
 /// zig-easy-cli to manage your logs
 pub fn logHandler(
     comptime level: std.log.Level,
-    comptime scope: @Type(.enum_literal),
+    comptime scope: @EnumLiteral(),
     comptime format: []const u8,
     args: anytype,
 ) void {
@@ -40,10 +40,10 @@ pub fn logHandler(
     const prefix = "[" ++ comptime level.asText() ++ "] ";
 
     // Print the message to stderr, silently ignoring any errors
-    std.debug.lockStdErr();
-    defer std.debug.unlockStdErr();
-    const stderr = std.io.getStdErr().writer();
-    nosuspend stderr.print(prefix ++ format ++ "\n", args) catch return;
+    var buffer: [64]u8 = undefined;
+    const stderr = std.debug.lockStderr(&buffer);
+    defer std.debug.unlockStderr();
+    nosuspend stderr.file_writer.interface.print(prefix ++ format ++ "\n", args) catch return;
 }
 
 /// Returns the last member of a path separated by `/`
@@ -334,7 +334,7 @@ fn autoCast(comptime T: type, value_str: []const u8) CliError!T {
         },
         .optional => |option| try autoCast(option.child, value_str),
         // note: for bool, having the flag in the first place means true
-        .bool => |_| {
+        .bool => {
             if (std.mem.eql(u8, "true", value_str)) {
                 return true;
             }
@@ -663,7 +663,8 @@ pub fn CliParser(comptime ctx: CliContext) type {
         ) CliError!void {
             inline for (ArgSt.fields) |arg| {
                 if (std.mem.eql(u8, cmd_name, arg.name)) {
-                    const fields = getSubparserFields(arg.type) orelse return;
+                    const maybe_fields = comptime getSubparserFields(arg.type);
+                    const fields = maybe_fields orelse return;
                     inline for (fields) |f| {
                         if (std.mem.eql(u8, cmd_value, f.name)) {
                             @field(self.args, arg.name) = @unionInit(getSubparserType(arg.type).?, f.name, undefined);
@@ -788,15 +789,6 @@ pub fn CliParser(comptime ctx: CliContext) type {
         pub fn parse(arg_it: anytype, error_payload: ?*ParamErrPayload) CliError!Self {
             var params: Self = undefined;
             try params.parseInternal(arg_it, error_payload, null);
-            if (params.builtin.use_file) |fpath| {
-                // we have to save the cli_name so we have to reparse
-                const cli_name = params.builtin.cli_name;
-                var parsed = Self.loadFromJsonFile(fpath, std.heap.page_allocator) catch {
-                    return CliError.InvalidJSON;
-                };
-                parsed.builtin.cli_name = parsed.builtin.cli_name orelse cli_name;
-                return parsed;
-            }
             return params;
         }
 
@@ -807,10 +799,10 @@ pub fn CliParser(comptime ctx: CliContext) type {
         /// it's fine to keep the file in memory forever- the OS will free this
         /// memory anyway on exit.
         /// If you want to manage this memory more closely, use `loadFromJson` directly
-        pub fn loadFromJsonFile(json_path: []const u8, allocator: Allocator) !Self {
-            const file = try std.fs.cwd().openFile(json_path, .{});
+        pub fn loadFromJsonFile(io: std.Io, json_path: []const u8, allocator: Allocator) !Self {
+            const file = try std.Io.Dir.cwd().openFile(io, json_path, .{});
             var buf: [1024]u8 = undefined;
-            var reader = file.reader(&buf);
+            var reader = file.reader(io, &buf);
             const buffer = reader.interface.readAlloc(allocator, json_max_size) catch return CliError.FileTooBig;
             return Self.loadFromJson(buffer, allocator);
         }
@@ -1109,7 +1101,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
                 return true;
             }
             inline for (ArgSt.fields) |arg| {
-                if (getSubparserFields(arg.type)) |_| {
+                if (comptime getSubparserFields(arg.type)) |_| {
                     // if arg is subparser it is a union by design
                     // TODO: fix for case of non-optional subcommands
                     if (@field(self.args, arg.name)) |subparser| {
@@ -1127,16 +1119,27 @@ pub fn CliParser(comptime ctx: CliContext) type {
         }
 
         pub fn runStandaloneWithOptions(
+            io: std.Io,
             custom_arg_it: anytype,
             custom_writer: ?*std.Io.Writer,
         ) !?Self {
             comptime argSanityCheck(ArgSt.fields);
             var err_payload: ParamErrPayload = .{};
-            const writer: *std.Io.Writer = if (custom_writer) |w| w else @constCast(&std.fs.File.stdout().writer(&.{}).interface);
+            var file_writer = std.Io.File.stdout().writer(io, &.{});
+            const writer: *std.Io.Writer = if (custom_writer) |w| w else &file_writer.interface;
             var params = Self.parse(custom_arg_it, &err_payload) catch |e| {
                 displayError(e, err_payload, writer);
                 return null;
             };
+            if (params.builtin.use_file) |fpath| {
+                // we have to save the cli_name so we have to reparse
+                const cli_name = params.builtin.cli_name;
+                params = Self.loadFromJsonFile(io, fpath, std.heap.page_allocator) catch {
+                    displayError(CliError.InvalidJSON, err_payload, writer);
+                    return null;
+                };
+                params.builtin.cli_name = params.builtin.cli_name orelse cli_name;
+            }
             const user_palette = styling.palettes.get(params.builtin.palette) orelse {
                 err_payload.field_name = "palette";
                 err_payload.value_str = params.builtin.palette;
@@ -1158,13 +1161,13 @@ pub fn CliParser(comptime ctx: CliContext) type {
             }
             return params;
         }
-        pub fn runStandalone() !?Self {
-            var it = std.process.args();
-            return runStandaloneWithOptions(&it, null);
+        pub fn runStandalone(init: std.process.Init) !?Self {
+            var it = init.minimal.args.iterate();
+            return runStandaloneWithOptions(init.io, &it, null);
         }
 
         /// Shows an error to the end user
-        pub fn displayError(err: CliError, err_payload: ParamErrPayload, writer: *std.io.Writer) void {
+        pub fn displayError(err: CliError, err_payload: ParamErrPayload, writer: *std.Io.Writer) void {
             const rich = RichWriter{ .writer = writer };
             switch (err) {
                 ParameterError.MissingArgument => {

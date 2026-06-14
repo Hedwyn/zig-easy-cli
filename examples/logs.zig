@@ -33,8 +33,8 @@ pub const ParserT = easycli.CliParser(.{
     .args_info = &arg_doc,
 });
 
-pub fn main() !void {
-    const params = if (try ParserT.runStandalone()) |p| p else return;
+pub fn main(init: std.process.Init) !void {
+    const params = if (try ParserT.runStandalone(init)) |p| p else return;
 
     // Some dummy log records...
     std.log.debug("If you see this, debug level is set !", .{});

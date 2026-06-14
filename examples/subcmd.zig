@@ -63,8 +63,8 @@ pub const ParserT = easycli.CliParser(.{
     .args = MainArg,
 });
 
-pub fn main() !void {
-    const main_params = if (try ParserT.runStandalone()) |p| p else return;
+pub fn main(init: std.process.Init) !void {
+    const main_params = if (try ParserT.runStandalone(init)) |p| p else return;
     const subcmd = main_params.args.subcmd orelse {
         std.debug.print("You must provide a subcommand !\n", .{});
         return;

@@ -27,8 +27,8 @@ pub const ParserT = easycli.CliParser(.{
     ,
 });
 
-pub fn main() !void {
-    const params = if (try ParserT.runStandalone()) |p| p else return;
+pub fn main(init: std.process.Init) !void {
+    const params = if (try ParserT.runStandalone(init)) |p| p else return;
 
     const username = params.args.username orelse {
         std.debug.print("Please pass a username\n", .{});
