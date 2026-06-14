@@ -881,16 +881,18 @@ pub fn CliParser(comptime ctx: CliContext) type {
                         try self.runSubparser(current_arg_name, arg, arg_it, error_payload);
                         continue;
                     }
-                    if (arg_cnt > ArgSt.fields.len) {
-                        return CliError.TooManyArguments;
+                    // Only positional arguments are tracked in `passed_args`;
+                    // options carry their own name and must not consume an
+                    // argument slot (doing so used to overflow the array).
+                    if (!is_option) {
+                        if (arg_cnt >= ArgSt.fields.len) {
+                            return CliError.TooManyArguments;
+                        }
+                        if (ArgSt.fields.len > 0) {
+                            passed_args[arg_cnt] = current_arg_name;
+                        }
+                        arg_cnt += 1;
                     }
-                    // Note: below condition is monkey-patch for compiler that has special condition
-                    // for array of size 0...
-                    // it cannot find out that the if statement above statically makes that case impossible
-                    if (ArgSt.fields.len > 0) {
-                        passed_args[arg_cnt] = current_arg_name;
-                    }
-                    arg_cnt += 1;
 
                     self.parseArg(
                         current_arg_name,
@@ -965,7 +967,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
                 }
             }
             if (!self.builtin.help) {
-                try checkMandatoryArgsPresence(&passed_args, error_payload);
+                try checkMandatoryArgsPresence(passed_args[0..arg_cnt], error_payload);
             }
         }
 
