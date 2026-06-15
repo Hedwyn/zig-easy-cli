@@ -49,9 +49,7 @@ pub fn build(b: *std.Build) void {
         const run_example_step = b.step(example_name, "Run " ++ example_name);
         const example_run = b.addRunArtifact(example);
         run_example_step.dependOn(&example_run.step);
-        if (b.args) |args| {
-            example_run.addArgs(args);
-        }
+        example_run.addPassthruArgs();
     }
 
     b.default_step.dependOn(examples_step);

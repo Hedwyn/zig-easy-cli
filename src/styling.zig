@@ -46,10 +46,11 @@ const AnsiColorCodes = enum(u16) {
     turquoise = 256 + 29,
 
     pub fn asText(self: AnsiColorCodes) []const u8 {
-        inline for (std.meta.fields(AnsiColorCodes)) |field| {
-            const is_256bits = field.value >= 0xFF;
+        const _info = @typeInfo(AnsiColorCodes).@"enum";
+        inline for (_info.field_values) |field_value| {
+            const is_256bits = field_value >= 0xFF;
             const fmt = comptime if (is_256bits) "[38;5;{}m" else "[{}m";
-            const value = comptime if (is_256bits) field.value & 0xFF else field.value;
+            const value = comptime if (is_256bits) field_value & 0xFF else field_value;
 
             const code = comptime blk: {
                 var buf: [max_ansi_color_code_len]u8 = undefined;
@@ -62,7 +63,7 @@ const AnsiColorCodes = enum(u16) {
                     .{self},
                 );
             };
-            if ((field.value) == @intFromEnum(self)) {
+            if (field_value == @intFromEnum(self)) {
                 return esc ++ code;
             }
         }
@@ -70,10 +71,11 @@ const AnsiColorCodes = enum(u16) {
     }
 
     pub fn asBackground(self: AnsiColorCodes) []const u8 {
-        inline for (std.meta.fields(AnsiColorCodes)) |field| {
-            const is_256bits = field.value >= 0xFF;
+        const _info = @typeInfo(AnsiColorCodes).@"enum";
+        inline for (_info.field_values) |field_value| {
+            const is_256bits = field_value >= 0xFF;
             const fmt = comptime if (is_256bits) "[48;5;{}m" else "[{}m";
-            const value = comptime if (is_256bits) field.value & 0xFF else field.value + 10;
+            const value = comptime if (is_256bits) field_value & 0xFF else field_value + 10;
             const code = comptime blk: {
                 var buf: [max_ansi_color_code_len]u8 = undefined;
                 break :blk std.fmt.bufPrint(
@@ -85,7 +87,7 @@ const AnsiColorCodes = enum(u16) {
                     .{self},
                 );
             };
-            if ((field.value) == @intFromEnum(self)) {
+            if (field_value == @intFromEnum(self)) {
                 return esc ++ code;
             }
         }
@@ -160,9 +162,10 @@ pub const Style = enum {
     Error,
 
     pub fn lookupStyle(self: Style, palette: std.StaticStringMap(StyleOptions)) ?StyleOptions {
-        inline for (std.meta.fields(Style)) |field| {
-            if ((field.value) == @intFromEnum(self)) {
-                return palette.get(field.name);
+        const _info = @typeInfo(Style).@"enum";
+        inline for (0.., _info.field_names) |i, name| {
+            if (_info.field_values[i] == @intFromEnum(self)) {
+                return palette.get(name);
             }
         }
         unreachable;

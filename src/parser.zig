@@ -7,10 +7,45 @@ const fmt = std.fmt;
 const testing = std.testing;
 const File = std.fs.File;
 const Writer = File.Writer;
-const Type = std.builtin.Type;
+const Type = std.lang.Type;
 const Struct = Type.Struct;
-const StructField = Type.StructField;
-const UnionField = Type.UnionField;
+// StructField and UnionField were removed in Zig 0.17; define local equivalents
+const StructField = struct {
+    name: [:0]const u8,
+    type: type,
+    default_value_ptr: ?*const anyopaque,
+};
+const UnionField = struct {
+    name: [:0]const u8,
+    type: type,
+};
+
+fn structFields(comptime T: type) []const StructField {
+    const info = @typeInfo(T).@"struct";
+    comptime var fields: [info.field_names.len]StructField = undefined;
+    inline for (0.., info.field_names) |i, name| {
+        fields[i] = .{
+            .name = name,
+            .type = info.field_types[i],
+            .default_value_ptr = info.field_attrs[i].default_value_ptr,
+        };
+    }
+    const f = fields;
+    return &f;
+}
+
+fn unionFields(comptime T: type) []const UnionField {
+    const info = @typeInfo(T).@"union";
+    comptime var fields: [info.field_names.len]UnionField = undefined;
+    inline for (0.., info.field_names) |i, name| {
+        fields[i] = .{
+            .name = name,
+            .type = info.field_types[i],
+        };
+    }
+    const f = fields;
+    return &f;
+}
 // types
 const Allocator = std.mem.Allocator;
 const ArgIterator = anyopaque;
@@ -135,20 +170,20 @@ const FlagType = enum {
 
 /// Formats the help hint for a set of choices given by enum fields
 /// The choices are separated with '|'
-pub fn formatEnumChoices(fields: []const Type.EnumField) []const u8 {
+pub fn formatEnumChoices(comptime e: Type.Enum) []const u8 {
     var choices: []const u8 = "";
-    inline for (fields) |field| {
-        choices = if (choices.len == 0) field.name else choices ++ "|" ++ field.name;
+    inline for (e.field_names) |name| {
+        choices = if (choices.len == 0) name else choices ++ "|" ++ name;
     }
     return choices;
 }
 
 /// Formats the help hint for a set of choices given by union fields
 /// The choices are separated with '|'
-pub fn formatUnionChoices(fields: []const Type.UnionField) []const u8 {
+pub fn formatUnionChoices(comptime u: Type.Union) []const u8 {
     var choices: []const u8 = "";
-    inline for (fields) |field| {
-        choices = if (choices.len == 0) field.name else choices ++ "|" ++ field.name;
+    inline for (u.field_names) |name| {
+        choices = if (choices.len == 0) name else choices ++ "|" ++ name;
     }
     return choices;
 }
@@ -163,8 +198,8 @@ pub fn getTypeName(comptime T: type) []const u8 {
         .bool => "flag",
         .int => "integer",
         .float => "float",
-        .@"enum" => |choices| formatEnumChoices(choices.fields),
-        .@"union" => |choices| "(subcommand) " ++ formatUnionChoices(choices.fields),
+        .@"enum" => |choices| formatEnumChoices(choices),
+        .@"union" => |choices| "(subcommand) " ++ formatUnionChoices(choices),
         .optional => |opt| "(Optional) " ++ getTypeName(opt.child),
         else => unreachable,
     };
@@ -186,9 +221,9 @@ pub fn formatDefaultValue(comptime T: type, comptime default_value: *const anyop
         .int, .float => "{d}",
         // .Enum => |choices| formatChoices(choices.fields), //TODO fix
         .@"enum" => |e| {
-            for (e.fields) |field| {
-                if (@as(T, @enumFromInt(field.value)) == default) {
-                    return field.name;
+            for (0.., e.field_names) |i, name| {
+                if (@as(T, @enumFromInt(e.field_values[i])) == default) {
+                    return name;
                 }
                 @compileError("Internal error: failed to find default for enum");
             }
@@ -210,7 +245,7 @@ pub fn formatDefaultValue(comptime T: type, comptime default_value: *const anyop
 test "format default string values" {
     const Options = struct { name: []const u8 = "Bob" };
     // const options: Options = comptime .{};
-    const option_field = std.meta.fields(Options)[0];
+    const option_field = comptime structFields(Options)[0];
     const default_name = formatDefaultValue(option_field.type, option_field.default_value_ptr.?);
     try std.testing.expectEqualStrings("Bob", default_name);
 }
@@ -218,7 +253,7 @@ test "format default string values" {
 test "format default non-string values" {
     const Options = struct { age: i32 = 42, height: f32 = 1.77, is_employee: bool = false };
     // const options: Options = comptime .{};
-    const fields = std.meta.fields(Options);
+    const fields = comptime structFields(Options);
 
     const default_age = formatDefaultValue(fields[0].type, fields[0].default_value_ptr.?);
     const default_height = formatDefaultValue(fields[1].type, fields[1].default_value_ptr.?);
@@ -232,7 +267,7 @@ test "format default non-string values" {
 /// Init all fields to their default value.
 /// Optionals are forced to null
 fn initDefaults(comptime T: type, container: *T) void {
-    inline for (std.meta.fields(T)) |field| {
+    inline for (comptime structFields(T)) |field| {
         switch (@typeInfo(field.type)) {
             .optional => @field(container, field.name) = null,
             else => {
@@ -250,9 +285,9 @@ fn initDefaults(comptime T: type, container: *T) void {
 fn buildRequiredParamsMap(comptime Params: Struct) std.StaticStringMap(bool) {
     const KVType = struct { []const u8, bool };
     const kv_pairs = comptime blk: {
-        var kv: [Params.fields.len]KVType = undefined;
-        for (0.., Params.fields) |i, field| {
-            kv[i] = .{ field.name, (field.default_value_ptr == null) };
+        var kv: [Params.field_names.len]KVType = undefined;
+        for (0.., Params.field_names) |i, name| {
+            kv[i] = .{ name, (Params.field_attrs[i].default_value_ptr == null) };
         }
         break :blk kv;
     };
@@ -265,8 +300,8 @@ fn buildRequiredParamsMap(comptime Params: Struct) std.StaticStringMap(bool) {
 /// required parameterd
 fn getRequiredParamsCount(comptime Params: Struct) usize {
     var count: usize = 0;
-    for (Params.fields) |field| {
-        if (field.default_value_ptr == null) {
+    for (Params.field_attrs) |attrs| {
+        if (attrs.default_value_ptr == null) {
             count += 1;
         }
     }
@@ -278,9 +313,9 @@ fn getRequiredParams(comptime Params: Struct) []const []const u8 {
         const len = getRequiredParamsCount(Params);
         var results: [len][]const u8 = undefined;
         var index: usize = 0;
-        for (Params.fields) |field| {
-            if (field.default_value_ptr == null) {
-                results[index] = field.name;
+        for (0.., Params.field_names) |i, name| {
+            if (Params.field_attrs[i].default_value_ptr == null) {
+                results[index] = name;
                 index += 1;
             }
         }
@@ -344,9 +379,9 @@ fn autoCast(comptime T: type, value_str: []const u8) CliError!T {
             return CliError.InvalidBooleanValue;
         },
         .@"enum" => |choices| {
-            inline for (choices.fields) |field| {
-                if (std.mem.eql(u8, field.name, value_str)) {
-                    return @enumFromInt(field.value);
+            inline for (0.., choices.field_names) |i, name| {
+                if (std.mem.eql(u8, name, value_str)) {
+                    return @enumFromInt(choices.field_values[i]);
                 }
             }
             return CliError.InvalidChoice;
@@ -371,18 +406,18 @@ pub fn fillOptionsInfo(
     comptime options: Struct,
     comptime options_info: []const OptionInfo,
 ) std.StaticStringMap(OptionInfo) {
-    var final_options: [options.fields.len]OptionInfo = undefined;
-    for (0.., options.fields) |i, field| {
+    var final_options: [options.field_names.len]OptionInfo = undefined;
+    for (0.., options.field_names) |i, name| {
         var option: OptionInfo = blk: {
             for (options_info) |opt| {
-                if (opt.name == field.name) {
+                if (opt.name == name) {
                     break :blk opt;
                 }
             }
             break :blk .{};
         };
         defer final_options[i] = option;
-        option.name = field.name;
+        option.name = name;
     }
 }
 /// Extracts the option identified by `opt_name` from the list of options `options_info`
@@ -501,8 +536,7 @@ test "build short flag map" {
         abcfg: bool, // expects -abc
         cba: bool, // expects -c
     };
-    const OptionsStruct = ensureStruct(TestOptions);
-    const short_flag_map = buildShortFlagMap(OptionsStruct.fields, &.{}, false);
+    const short_flag_map = buildShortFlagMap(comptime structFields(TestOptions), &.{}, false);
     try std.testing.expectEqualStrings("abcde", short_flag_map.get("a").?);
     try std.testing.expectEqualStrings("abd", short_flag_map.get("ab").?);
     try std.testing.expectEqualStrings("abcfg", short_flag_map.get("abc").?);
@@ -544,8 +578,7 @@ test "parse option defaults" {
         abcfg: f32 = 3.14, // expects -abc
         cba: []const u8 = "Hello", // expects -c
     };
-    const OptionsStruct = ensureStruct(TestOptions);
-    const options_info = comptime parseOptionInfo(OptionsStruct.fields, &.{});
+    const options_info = comptime parseOptionInfo(structFields(TestOptions), &.{});
     try std.testing.expectEqualStrings("42", options_info[0].default_value.?);
     try std.testing.expectEqualStrings("false", options_info[1].default_value.?);
     try std.testing.expectEqualStrings("3.14", options_info[2].default_value.?);
@@ -572,8 +605,7 @@ test "option info map" {
         abcfg: f32 = 3.14, // expects -abc
         cba: []const u8 = "Hello", // expects -c
     };
-    const OptionsStruct = ensureStruct(TestOptions);
-    const options_info = comptime buildOptionInfoMap(OptionsStruct.fields, &.{});
+    const options_info = comptime buildOptionInfoMap(structFields(TestOptions), &.{});
 
     try std.testing.expectEqualStrings(options_info.get("abcde").?.short_name, "a");
 }
@@ -606,7 +638,7 @@ pub fn getSubparserType(field_type: type) ?type {
 
 pub fn getSubparserFields(field_type: type) ?[]const UnionField {
     return switch (@typeInfo(field_type)) {
-        .@"union" => |u| u.fields,
+        .@"union" => unionFields(field_type),
         .optional => |opt| getSubparserFields(opt.child),
         else => null,
     };
@@ -646,9 +678,9 @@ pub fn CliParser(comptime ctx: CliContext) type {
         const BuiltinSt = ensureStruct(BuiltinOptions);
 
         /// Checking at comptime if argument struct is OK
-        const flag_to_name_map = buildShortFlagMap(OptionSt.fields, ctx.opts_info, false);
-        const name_to_flag_map = buildShortFlagMap(OptionSt.fields, ctx.opts_info, true);
-        const options_info_map = buildOptionInfoMap(OptionSt.fields, ctx.opts_info);
+        const flag_to_name_map = buildShortFlagMap(structFields(OptionT), ctx.opts_info, false);
+        const name_to_flag_map = buildShortFlagMap(structFields(OptionT), ctx.opts_info, true);
+        const options_info_map = buildOptionInfoMap(structFields(OptionT), ctx.opts_info);
 
         //
         const required_arg_count = getRequiredParamsCount(ArgSt);
@@ -661,7 +693,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
             arg_it: anytype,
             error_payload: ?*ParamErrPayload,
         ) CliError!void {
-            inline for (ArgSt.fields) |arg| {
+            inline for (comptime structFields(ArgT)) |arg| {
                 if (std.mem.eql(u8, cmd_name, arg.name)) {
                     const maybe_fields = comptime getSubparserFields(arg.type);
                     const fields = maybe_fields orelse return;
@@ -681,7 +713,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
         }
 
         pub fn isSubcommand(cmd_name: []const u8) bool {
-            inline for (ArgSt.fields) |arg| {
+            inline for (comptime structFields(ArgT)) |arg| {
                 if (std.mem.eql(u8, cmd_name, arg.name)) {
                     if (getSubparserFields(arg.type)) |_| {
                         return true;
@@ -693,8 +725,8 @@ pub fn CliParser(comptime ctx: CliContext) type {
 
         /// Checks if the given argument is a boolean flag
         fn isFlag(arg_name: []const u8) CliError!bool {
-            inline for ([_]Struct{ OptionSt, ArgSt, BuiltinSt }) |type_st| {
-                inline for (type_st.fields) |field| {
+            inline for ([_]type{ OptionT, ArgT, BuiltinOptions }) |T| {
+                inline for (comptime structFields(T)) |field| {
                     if (std.mem.eql(u8, field.name, arg_name)) {
                         return switch (@typeInfo(field.type)) {
                             .bool => true,
@@ -722,8 +754,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
         }
 
         pub fn setArgFromString(comptime T: type, arg_name: []const u8, arg_value: []const u8, container: *T) CliError!void {
-            const struct_info = ensureStruct(T);
-            inline for (struct_info.fields) |field| {
+            inline for (comptime structFields(T)) |field| {
                 if (std.mem.eql(u8, field.name, arg_name)) {
                     @field(container, field.name) = try autoCast(field.type, arg_value);
                     return;
@@ -778,7 +809,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
         }
 
         pub fn introspectArgName(arg_idx: usize) CliError![]const u8 {
-            inline for (0.., ArgSt.fields) |i, field| {
+            inline for (0.., comptime structFields(ArgT)) |i, field| {
                 if (i == arg_idx) {
                     return field.name;
                 }
@@ -852,7 +883,8 @@ pub fn CliParser(comptime ctx: CliContext) type {
             initDefaults(BuiltinOptions, &(self.builtin));
 
             var arg_cnt: usize = 0;
-            var passed_args: [ArgSt.fields.len][]const u8 = undefined;
+            const _arg_field_count = @typeInfo(ArgT).@"struct".field_names.len;
+            var passed_args: [_arg_field_count][]const u8 = undefined;
 
             var is_option: bool = false;
             var flag_type: ?FlagType = null;
@@ -885,10 +917,10 @@ pub fn CliParser(comptime ctx: CliContext) type {
                     // options carry their own name and must not consume an
                     // argument slot (doing so used to overflow the array).
                     if (!is_option) {
-                        if (arg_cnt >= ArgSt.fields.len) {
+                        if (arg_cnt >= _arg_field_count) {
                             return CliError.TooManyArguments;
                         }
-                        if (ArgSt.fields.len > 0) {
+                        if (comptime _arg_field_count > 0) {
                             passed_args[arg_cnt] = current_arg_name;
                         }
                         arg_cnt += 1;
@@ -1011,7 +1043,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
             writer.richPrint("===== Usage =====", .Header2, .{});
             // Showing typical usage
             writer.richPrint(">>> {s}", .Field, .{self.builtin.cli_name.?});
-            inline for (std.meta.fields(ArgT)) |field| {
+            inline for (comptime structFields(ArgT)) |field| {
                 writer.richPrint(" {{{s}}}  ", .Field, .{field.name});
             }
             writer.write("\n\n");
@@ -1023,7 +1055,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
                     .Header2,
                     .{},
                 );
-                inline for (std.meta.fields(ArgT)) |field| {
+                inline for (comptime structFields(ArgT)) |field| {
                     writer.richPrint(
                         "{s}: {s}",
                         .Entry,
@@ -1048,7 +1080,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
                     .Header2,
                     .{},
                 );
-                inline for (std.meta.fields(OptionT)) |field| {
+                inline for (comptime structFields(OptionT)) |field| {
                     const opt_internal_info = comptime options_info_map.get(field.name) orelse panic(
                         "Internal error: option {s} internal info has not been extracted properly",
                         .{field.name},
@@ -1076,7 +1108,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
                     }
                 }
                 if (!ctx.show_builtin_help) return;
-                inline for (std.meta.fields(BuiltinOptions)) |field| {
+                inline for (comptime structFields(BuiltinOptions)) |field| {
                     const opt_internal_info = getOptionInternalInfo(field.name, ctx.builtin_info).?;
                     writer.richPrint(
                         "--{s}: {s}",
@@ -1102,7 +1134,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
                 try self.emitHelp(writer);
                 return true;
             }
-            inline for (ArgSt.fields) |arg| {
+            inline for (comptime structFields(ArgT)) |arg| {
                 if (comptime getSubparserFields(arg.type)) |_| {
                     // if arg is subparser it is a union by design
                     // TODO: fix for case of non-optional subcommands
@@ -1125,7 +1157,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
             custom_arg_it: anytype,
             custom_writer: ?*std.Io.Writer,
         ) !?Self {
-            comptime argSanityCheck(ArgSt.fields);
+            comptime argSanityCheck(structFields(ArgT));
             var err_payload: ParamErrPayload = .{};
             var file_writer = std.Io.File.stdout().writer(io, &.{});
             const writer: *std.Io.Writer = if (custom_writer) |w| w else &file_writer.interface;
