@@ -1,7 +1,7 @@
 /// Engine for the CLI utility
 const std = @import("std");
 const log = std.log;
-const styling = @import("styling.zig");
+const styling = @import("styling");
 const fmt = std.fmt;
 
 const testing = std.testing;

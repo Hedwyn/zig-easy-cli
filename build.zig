@@ -23,12 +23,20 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
+    const styling_module = b.addModule("styling", .{ .root_source_file = b.path("src/styling.zig") });
     const mod = b.addModule("zig-easy-cli", .{
         .root_source_file = b.path("src/parser.zig"),
         .target = target,
+        .imports = &.{
+            .{ .name = "styling", .module = styling_module },
+        },
     });
-    const parser_module = b.addModule("parser", .{ .root_source_file = b.path("src/parser.zig") });
-    const styling_module = b.addModule("styling", .{ .root_source_file = b.path("src/styling.zig") });
+    const parser_module = b.addModule("parser", .{
+        .root_source_file = b.path("src/parser.zig"),
+        .imports = &.{
+            .{ .name = "styling", .module = styling_module },
+        },
+    });
 
     const examples_step = b.step("examples", "Run examples");
 
