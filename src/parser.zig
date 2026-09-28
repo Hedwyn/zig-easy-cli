@@ -81,11 +81,10 @@ pub fn logHandler(
     nosuspend stderr.file_writer.interface.print(prefix ++ format ++ "\n", args) catch return;
 }
 
-/// Returns the last member of a path separated by `/`
+/// Returns the last member of a path separated by `/` or `\`
 pub fn getPathBasename(path: []const u8) []const u8 {
-    // TODO: windows
     var basename = path;
-    var split_it = std.mem.splitSequence(u8, basename, "/");
+    var split_it = std.mem.splitAny(u8, basename, "/\\");
     while (split_it.next()) |chunk| {
         basename = chunk;
     }
@@ -1196,7 +1195,13 @@ pub fn CliParser(comptime ctx: CliContext) type {
             return params;
         }
         pub fn runStandalone(init: std.process.Init) !?Self {
-            var it = init.minimal.args.iterate();
+            // `iterate()` is POSIX-only; Windows requires an allocator to decode
+            // the WTF-16 command line, so we use the cross-platform variant.
+            // The returned `Self` holds slices pointing into the iterator's
+            // buffer, so it must stay alive for the process lifetime; it is
+            // allocated from the arena, which is cleaned up on exit, so we
+            // deliberately do not call `it.deinit()` here.
+            var it = try init.minimal.args.iterateAllocator(init.arena.allocator());
             return runStandaloneWithOptions(init.io, &it, null);
         }
 

@@ -43,12 +43,13 @@ pub fn main(init: std.process.Init) !void {
     std.log.err("If you see this, at least error level is set !", .{});
 
     // In a programmatic way
-    inline for (std.meta.fields(Level)) |field| {
-        const level: Level = @enumFromInt(field.value);
+    const level_info = @typeInfo(Level).@"enum";
+    inline for (0.., level_info.field_names) |i_field, field_name| {
+        const level: Level = @enumFromInt(level_info.field_values[i_field]);
 
         for (0..params.options.times) |i| {
             std.options.logFn(level, .default, "[{s}] Saying `{s}`, attempt {d}", .{
-                field.name,
+                field_name,
                 params.args.message,
                 i,
             });
