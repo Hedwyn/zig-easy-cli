@@ -44,6 +44,7 @@ const AnsiColorCodes = enum(u16) {
     dark_green = 256 + 22,
     clay = 256 + 172,
     turquoise = 256 + 29,
+    dark_grey = 256 + 238,
 
     pub fn asText(self: AnsiColorCodes) []const u8 {
         const _info = @typeInfo(AnsiColorCodes).@"enum";
@@ -234,6 +235,15 @@ pub const RichWriter = struct {
         if (opts.border_style == null) opts.border_style = Style.Border.lookupStyle(self.palette);
         if (opts.header_style == null) opts.header_style = Style.Header2.lookupStyle(self.palette);
         writeTable(self.writer, headers, rows, opts) catch |err| self.handleError(err);
+    }
+
+    /// Creates a progress bar filled with the palette's `Border` color.
+    pub fn progressBar(self: RichWriter, options: ProgressOptions) ProgressBar {
+        var opts = options;
+        if (opts.fill_color == null) {
+            if (Style.Border.lookupStyle(self.palette)) |s| opts.fill_color = s.text_color;
+        }
+        return ProgressBar.init(self.writer, opts);
     }
 
     pub fn richPrint(self: RichWriter, comptime format: []const u8, style: Style, args: anytype) void {
@@ -601,6 +611,222 @@ test "table: empty table writes nothing" {
     var w = std.Io.Writer.fixed(&buf);
     try writeTable(&w, null, &.{}, .{});
     try std.testing.expectEqual(@as(usize, 0), w.buffered().len);
+}
+
+pub const ProgressOptions = struct {
+    total: u64,
+    /// Width of the bar itself, in terminal columns. Keep it below the terminal width.
+    width: usize = 30,
+    label: []const u8 = "",
+    show_percent: bool = true,
+    show_count: bool = true,
+    fill_color: ?AnsiColorCodes = null,
+    track_color: AnsiColorCodes = .dark_grey,
+    /// Redraw in place with ANSI escapes. When false (output is not a terminal),
+    /// nothing is drawn until `finish`, which prints a single plain line.
+    interactive: bool = true,
+    hide_cursor: bool = true,
+};
+
+// Left-aligned partial blocks, from 1/8 to 7/8 of a cell
+const partial_blocks = [_][]const u8{ "▏", "▎", "▍", "▌", "▋", "▊", "▉" };
+
+/// A progress bar living on the last line of the output. It has a sub-cell
+/// resolution (eighths of a cell), and the unfilled part is a colored track,
+/// so it grows smoothly without gaps.
+///
+/// Every redraw starts with `\r` + "erase line", so the bar is always drawn
+/// whole on the current line, whatever happened before. Text printed through
+/// `log` is written above the bar, which is then redrawn below it. Text written
+/// to the same stream behind our back will leave a stale copy of the bar behind
+/// it if it ends with a newline, but the active bar is still drawn correctly
+/// on the new line. Such a write should end with a newline: a partial line
+/// would be erased by the next redraw.
+pub const ProgressBar = struct {
+    writer: *std.Io.Writer,
+    options: ProgressOptions,
+    current: u64 = 0,
+    started: bool = false,
+    last_drawn: ?[3]u64 = null,
+
+    pub fn init(writer: *std.Io.Writer, options: ProgressOptions) ProgressBar {
+        return .{ .writer = writer, .options = options };
+    }
+
+    pub fn start(self: *ProgressBar) !void {
+        self.started = true;
+        if (!self.options.interactive) return;
+        if (self.options.hide_cursor) try self.writer.writeAll(hide_cursor_seq);
+        try self.draw();
+    }
+
+    /// Moves the bar to `value` (clamped to the total)
+    pub fn set(self: *ProgressBar, value: u64) !void {
+        self.current = @min(value, self.options.total);
+        if (self.started and self.options.interactive) try self.draw();
+    }
+
+    pub fn advance(self: *ProgressBar, delta: u64) !void {
+        try self.set(self.current +| delta);
+    }
+
+    /// Prints a line of text above the bar, then redraws the bar below it
+    pub fn log(self: *ProgressBar, comptime format: []const u8, args: anytype) !void {
+        const interactive = self.started and self.options.interactive;
+        if (interactive) try self.writer.writeAll(clear_line_seq);
+        try self.writer.print(format ++ "\n", args);
+        if (interactive) {
+            self.last_drawn = null;
+            try self.draw();
+        }
+    }
+
+    /// Draws the final state, ends the line and restores the cursor
+    pub fn finish(self: *ProgressBar) !void {
+        self.current = self.options.total;
+        if (self.options.interactive) {
+            self.last_drawn = null;
+            try self.draw();
+            try self.writer.writeByte('\n');
+            if (self.options.hide_cursor) try self.writer.writeAll(show_cursor_seq);
+        } else {
+            try self.writer.writeAll(self.options.label);
+            if (self.options.label.len > 0) try self.writer.writeByte(' ');
+            try self.writer.print("100% ({d}/{d})\n", .{ self.current, self.options.total });
+        }
+        self.started = false;
+        try self.writer.flush();
+    }
+
+    const clear_line_seq = "\r" ++ esc ++ "[2K";
+    const hide_cursor_seq = esc ++ "[?25l";
+    const show_cursor_seq = esc ++ "[?25h";
+
+    fn eighths(self: ProgressBar) u64 {
+        const total = self.options.total;
+        const max_eighths: u128 = @as(u128, self.options.width) * 8;
+        if (total == 0) return @intCast(max_eighths);
+        return @intCast(@as(u128, self.current) * max_eighths / total);
+    }
+
+    fn percent(self: ProgressBar) u64 {
+        if (self.options.total == 0) return 100;
+        return @intCast(@as(u128, self.current) * 100 / self.options.total);
+    }
+
+    fn draw(self: *ProgressBar) !void {
+        // Skip redraws that would not change anything visible
+        const key = [3]u64{
+            self.eighths(),
+            if (self.options.show_percent) self.percent() else 0,
+            if (self.options.show_count) self.current else 0,
+        };
+        if (self.last_drawn) |last| {
+            if (std.mem.eql(u64, &last, &key)) return;
+        }
+        self.last_drawn = key;
+        try self.writer.writeAll(clear_line_seq);
+        try self.writeBody(self.writer);
+        try self.writer.flush();
+    }
+
+    /// The bar and its labels, without any cursor control
+    fn writeBody(self: ProgressBar, writer: *std.Io.Writer) !void {
+        const opts = self.options;
+        if (opts.label.len > 0) {
+            try writer.writeAll(opts.label);
+            try writer.writeByte(' ');
+        }
+
+        const fill = opts.fill_color orelse AnsiColorCodes.cyan;
+        const filled = self.eighths();
+        const full: usize = @intCast(filled / 8);
+        const part: usize = @intCast(filled % 8);
+        const used = full + @intFromBool(part > 0);
+
+        try writer.writeAll(fill.asText());
+        try writer.writeAll(opts.track_color.asBackground());
+        try writeRepeated(writer, "█", full);
+        if (part > 0) try writer.writeAll(partial_blocks[part - 1]);
+        try writeRepeated(writer, " ", opts.width - used);
+        try writer.writeAll(reset);
+
+        if (opts.show_percent) try writer.print(" {d:>3}%", .{self.percent()});
+        if (opts.show_count) try writer.print(" {d}/{d}", .{ self.current, opts.total });
+    }
+};
+
+test "progress bar: smooth sub-cell fill" {
+    var buf: [512]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    const opts: ProgressOptions = .{
+        .total = 16,
+        .width = 8,
+        .fill_color = .green,
+        .track_color = .black,
+        .show_count = false,
+    };
+    const head = comptime AnsiColorCodes.green.asText() ++ AnsiColorCodes.black.asBackground();
+
+    var bar = ProgressBar.init(&w, opts);
+    bar.current = 1; // 4/64 eighths: half a cell
+    try bar.writeBody(&w);
+    try std.testing.expectEqualStrings(head ++ "▌       " ++ reset ++ "   6%", w.buffered());
+
+    _ = w.consumeAll();
+    bar.current = 8; // exactly half
+    try bar.writeBody(&w);
+    try std.testing.expectEqualStrings(head ++ "████    " ++ reset ++ "  50%", w.buffered());
+
+    _ = w.consumeAll();
+    bar.current = 16;
+    try bar.writeBody(&w);
+    try std.testing.expectEqualStrings(head ++ "████████" ++ reset ++ " 100%", w.buffered());
+}
+
+test "progress bar: log goes above the bar, which is redrawn below" {
+    var buf: [2048]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    var bar = ProgressBar.init(&w, .{ .total = 4, .width = 4, .show_count = false, .show_percent = false });
+    try bar.start();
+    try bar.set(2);
+    _ = w.consumeAll();
+
+    try bar.log("hello {s}", .{"world"});
+    const out = w.buffered();
+    const clear = "\r" ++ esc ++ "[2K";
+    try std.testing.expect(std.mem.startsWith(u8, out, clear ++ "hello world\n" ++ clear));
+    // the bar is redrawn at its current value, with no trailing newline
+    try std.testing.expect(std.mem.indexOf(u8, out, "██  ") != null);
+    try std.testing.expect(!std.mem.endsWith(u8, out, "\n"));
+}
+
+test "progress bar: unchanged state is not redrawn" {
+    var buf: [2048]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    var bar = ProgressBar.init(&w, .{ .total = 1000, .width = 4, .show_count = false, .show_percent = false });
+    try bar.start();
+    _ = w.consumeAll();
+    try bar.set(1); // 1/1000 of 32 eighths: still empty
+    try std.testing.expectEqual(@as(usize, 0), w.buffered().len);
+    try bar.set(500);
+    try std.testing.expect(w.buffered().len > 0);
+}
+
+test "progress bar: finish restores the cursor, non-interactive prints one line" {
+    var buf: [2048]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    var bar = ProgressBar.init(&w, .{ .total = 4, .width = 4 });
+    try bar.start();
+    try bar.finish();
+    try std.testing.expect(std.mem.endsWith(u8, w.buffered(), "\n" ++ esc ++ "[?25h"));
+
+    _ = w.consumeAll();
+    var plain = ProgressBar.init(&w, .{ .total = 4, .label = "Copy", .interactive = false });
+    try plain.start();
+    try plain.set(2);
+    try plain.finish();
+    try std.testing.expectEqualStrings("Copy 100% (4/4)\n", w.buffered());
 }
 
 // Base color palettes
