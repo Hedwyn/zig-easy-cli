@@ -7,6 +7,7 @@ const examples = &.{
     "minimal",
     "secret",
     "tests",
+    "table",
 };
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
@@ -73,6 +74,14 @@ pub fn build(b: *std.Build) void {
     // Similar to creating the run step earlier, this exposes a `test` step to
     // the `zig build --help` menu, providing a way for the user to request
     // running the unit tests.
+    const styling_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/styling.zig"),
+            .target = target,
+        }),
+    });
+
     const test_step = b.step("test", "Run unit tests");
+    test_step.dependOn(&b.addRunArtifact(styling_tests).step);
     test_step.dependOn(&run_lib_unit_tests.step);
 }

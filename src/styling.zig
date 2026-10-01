@@ -160,6 +160,7 @@ pub const Style = enum {
     Field,
     Hint,
     Error,
+    Border,
 
     pub fn lookupStyle(self: Style, palette: std.StaticStringMap(StyleOptions)) ?StyleOptions {
         const _info = @typeInfo(Style).@"enum";
@@ -176,6 +177,12 @@ pub const RichWriter = struct {
     writer: *std.Io.Writer,
     on_error: ?(*const fn (anyerror) void) = null,
     palette: std.StaticStringMap(StyleOptions) = default_palette,
+
+    fn handleError(self: RichWriter, err: anyerror) void {
+        if (self.on_error) |handler| {
+            handler(err);
+        } else panic("Writer {} failed: {}, no error handler defined\n", .{ self, err });
+    }
 
     pub fn write(self: RichWriter, bytes: []const u8) void {
         _ = self.writer.write(bytes) catch |err| {
@@ -203,17 +210,7 @@ pub const RichWriter = struct {
         options: StyleOptions,
         args: anytype,
     ) void {
-        if (options.bold) {
-            self.write(bold);
-        }
-        if (options.italic) {
-            self.write(italic);
-        }
-        if (options.dim) {
-            self.write(dim);
-        }
-        self.write(options.getBackgroundColor());
-        self.write(options.getTextColor());
+        writeStylePrefix(self.writer, options) catch |err| self.handleError(err);
         if (options.framed) {
             printFramedText(self.writer, options.frame_params orelse .{}, format, args) catch unreachable;
         } else {
@@ -225,6 +222,20 @@ pub const RichWriter = struct {
         }
     }
 
+    /// Draws a table, styled with the palette's `Border` and `Header2` styles
+    /// unless `options` overrides them.
+    pub fn table(
+        self: RichWriter,
+        headers: ?[]const []const u8,
+        rows: []const []const []const u8,
+        options: TableOptions,
+    ) void {
+        var opts = options;
+        if (opts.border_style == null) opts.border_style = Style.Border.lookupStyle(self.palette);
+        if (opts.header_style == null) opts.header_style = Style.Header2.lookupStyle(self.palette);
+        writeTable(self.writer, headers, rows, opts) catch |err| self.handleError(err);
+    }
+
     pub fn richPrint(self: RichWriter, comptime format: []const u8, style: Style, args: anytype) void {
         if (style.lookupStyle(self.palette)) |options| {
             self.styledPrint(format, options, args);
@@ -233,6 +244,14 @@ pub const RichWriter = struct {
         }
     }
 };
+
+fn writeStylePrefix(writer: *std.Io.Writer, options: StyleOptions) !void {
+    if (options.bold) try writer.writeAll(bold);
+    if (options.italic) try writer.writeAll(italic);
+    if (options.dim) try writer.writeAll(dim);
+    try writer.writeAll(options.getBackgroundColor());
+    try writer.writeAll(options.getTextColor());
+}
 
 const CellContent = union(enum) { frame, pad, text: usize };
 
@@ -285,6 +304,305 @@ pub fn writeFramedText(writer: *std.Io.Writer, text: []const u8, parameters: Fra
     try writer.writeByte('\n');
 }
 
+pub const Align = enum { left, right, center };
+
+pub const BorderStyle = enum { light, rounded, heavy, double, ascii };
+
+const BorderSet = struct {
+    h: []const u8,
+    v: []const u8,
+    tl: []const u8,
+    tr: []const u8,
+    bl: []const u8,
+    br: []const u8,
+    t_down: []const u8,
+    t_up: []const u8,
+    t_right: []const u8,
+    t_left: []const u8,
+    cross: []const u8,
+};
+
+fn borderSet(style: BorderStyle) BorderSet {
+    return switch (style) {
+        .light => .{ .h = "─", .v = "│", .tl = "┌", .tr = "┐", .bl = "└", .br = "┘", .t_down = "┬", .t_up = "┴", .t_right = "├", .t_left = "┤", .cross = "┼" },
+        .rounded => .{ .h = "─", .v = "│", .tl = "╭", .tr = "╮", .bl = "╰", .br = "╯", .t_down = "┬", .t_up = "┴", .t_right = "├", .t_left = "┤", .cross = "┼" },
+        .heavy => .{ .h = "━", .v = "┃", .tl = "┏", .tr = "┓", .bl = "┗", .br = "┛", .t_down = "┳", .t_up = "┻", .t_right = "┣", .t_left = "┫", .cross = "╋" },
+        .double => .{ .h = "═", .v = "║", .tl = "╔", .tr = "╗", .bl = "╚", .br = "╝", .t_down = "╦", .t_up = "╩", .t_right = "╠", .t_left = "╣", .cross = "╬" },
+        .ascii => .{ .h = "-", .v = "|", .tl = "+", .tr = "+", .bl = "+", .br = "+", .t_down = "+", .t_up = "+", .t_right = "+", .t_left = "+", .cross = "+" },
+    };
+}
+
+pub const TableOptions = struct {
+    border: BorderStyle = .rounded,
+    /// Spaces on each side of a cell's content
+    padding: usize = 1,
+    /// Draw a rule between every row, not only below the header
+    row_separators: bool = false,
+    /// Per column; missing entries default to `.left`
+    alignments: []const Align = &.{},
+    /// Total table width, borders included. Wider columns are truncated with '…'
+    max_width: ?usize = null,
+    border_style: ?StyleOptions = null,
+    header_style: ?StyleOptions = null,
+};
+
+const max_table_columns = 32;
+
+/// Number of terminal columns taken by `text`: ANSI escape sequences are
+/// skipped and each UTF-8 codepoint counts for one column.
+pub fn displayWidth(text: []const u8) usize {
+    var width: usize = 0;
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        if (text[i] == 0x1b) {
+            i = skipEscape(text, i);
+        } else if (text[i] & 0xC0 != 0x80) {
+            width += 1;
+        }
+    }
+    return width;
+}
+
+/// Given `text[start] == ESC`, returns the index of the last byte of the sequence
+fn skipEscape(text: []const u8, start: usize) usize {
+    var i = start + 1;
+    if (i < text.len and text[i] == '[') {
+        i += 1;
+        // CSI: parameter/intermediate bytes, then a final byte in 0x40..0x7E
+        while (i < text.len and (text[i] < 0x40 or text[i] > 0x7E)) i += 1;
+    }
+    return @min(i, text.len -| 1);
+}
+
+/// Writes `text` cut to at most `max` columns (last one being '…' if cut).
+/// Returns the number of columns written.
+fn writeFitted(writer: *std.Io.Writer, text: []const u8, max: usize) !usize {
+    const full = displayWidth(text);
+    if (full <= max) {
+        try writer.writeAll(text);
+        return full;
+    }
+    if (max == 0) return 0;
+    var visible: usize = 0;
+    var saw_escape = false;
+    var i: usize = 0;
+    while (i < text.len) {
+        if (text[i] == 0x1b) {
+            const end = skipEscape(text, i) + 1;
+            try writer.writeAll(text[i..end]);
+            saw_escape = true;
+            i = end;
+            continue;
+        }
+        if (visible == max - 1) break;
+        const len = std.unicode.utf8ByteSequenceLength(text[i]) catch 1;
+        const end = @min(i + len, text.len);
+        try writer.writeAll(text[i..end]);
+        visible += 1;
+        i = end;
+    }
+    try writer.writeAll("…");
+    if (saw_escape) try writer.writeAll(reset);
+    return visible + 1;
+}
+
+fn writeRepeated(writer: *std.Io.Writer, s: []const u8, n: usize) !void {
+    for (0..n) |_| try writer.writeAll(s);
+}
+
+fn writeBorder(writer: *std.Io.Writer, glyph: []const u8, style: ?StyleOptions) !void {
+    if (style) |st| {
+        try writeStylePrefix(writer, st);
+        try writer.writeAll(glyph);
+        try writer.writeAll(reset);
+    } else try writer.writeAll(glyph);
+}
+
+fn writeRule(
+    writer: *std.Io.Writer,
+    set: BorderSet,
+    left: []const u8,
+    mid: []const u8,
+    right: []const u8,
+    widths: []const usize,
+    opts: TableOptions,
+) !void {
+    if (opts.border_style) |st| try writeStylePrefix(writer, st);
+    try writer.writeAll(left);
+    for (widths, 0..) |w, i| {
+        if (i > 0) try writer.writeAll(mid);
+        try writeRepeated(writer, set.h, w + 2 * opts.padding);
+    }
+    try writer.writeAll(right);
+    if (opts.border_style != null) try writer.writeAll(reset);
+    try writer.writeByte('\n');
+}
+
+fn writeRow(
+    writer: *std.Io.Writer,
+    set: BorderSet,
+    cells: []const []const u8,
+    widths: []const usize,
+    opts: TableOptions,
+    cell_style: ?StyleOptions,
+) !void {
+    for (widths, 0..) |w, i| {
+        try writeBorder(writer, set.v, opts.border_style);
+        if (cell_style) |st| try writeStylePrefix(writer, st);
+        try writeRepeated(writer, " ", opts.padding);
+
+        // Alignment depends on the width of the text once truncated
+        const text: []const u8 = if (i < cells.len) cells[i] else "";
+        const shown = @min(displayWidth(text), w);
+        const extra = w - shown;
+        const alignment: Align = if (i < opts.alignments.len) opts.alignments[i] else .left;
+        const before: usize = switch (alignment) {
+            .left => 0,
+            .right => extra,
+            .center => extra / 2,
+        };
+        try writeRepeated(writer, " ", before);
+        _ = try writeFitted(writer, text, w);
+        try writeRepeated(writer, " ", extra - before);
+
+        try writeRepeated(writer, " ", opts.padding);
+        if (cell_style != null) try writer.writeAll(reset);
+    }
+    try writeBorder(writer, set.v, opts.border_style);
+    try writer.writeByte('\n');
+}
+
+/// Shrinks the widest columns one column at a time until the table fits `max_width`
+fn shrinkColumns(widths: []usize, max_width: usize, padding: usize) void {
+    const overhead = widths.len * 2 * padding + widths.len + 1;
+    var total = overhead;
+    for (widths) |w| total += w;
+    while (total > max_width) {
+        var widest: usize = 0;
+        for (widths, 0..) |w, i| {
+            if (w > widths[widest]) widest = i;
+        }
+        if (widths[widest] <= 1) return;
+        widths[widest] -= 1;
+        total -= 1;
+    }
+}
+
+/// Draws a table with continuous box-drawing borders. Rows may have fewer
+/// cells than there are columns; missing cells are left blank.
+pub fn writeTable(
+    writer: *std.Io.Writer,
+    headers: ?[]const []const u8,
+    rows: []const []const []const u8,
+    opts: TableOptions,
+) !void {
+    var ncols: usize = if (headers) |h| h.len else 0;
+    for (rows) |row| ncols = @max(ncols, row.len);
+    if (ncols == 0) return;
+    if (ncols > max_table_columns) return error.TooManyColumns;
+
+    var width_buf: [max_table_columns]usize = @splat(0);
+    const widths = width_buf[0..ncols];
+    if (headers) |h| {
+        for (h, 0..) |cell, i| widths[i] = @max(widths[i], displayWidth(cell));
+    }
+    for (rows) |row| {
+        for (row, 0..) |cell, i| widths[i] = @max(widths[i], displayWidth(cell));
+    }
+    if (opts.max_width) |max_width| shrinkColumns(widths, max_width, opts.padding);
+
+    const set = borderSet(opts.border);
+    try writeRule(writer, set, set.tl, set.t_down, set.tr, widths, opts);
+    if (headers) |h| {
+        try writeRow(writer, set, h, widths, opts, opts.header_style);
+        try writeRule(writer, set, set.t_right, set.cross, set.t_left, widths, opts);
+    }
+    for (rows, 0..) |row, j| {
+        try writeRow(writer, set, row, widths, opts, null);
+        if (opts.row_separators and j + 1 < rows.len) {
+            try writeRule(writer, set, set.t_right, set.cross, set.t_left, widths, opts);
+        }
+    }
+    try writeRule(writer, set, set.bl, set.t_up, set.br, widths, opts);
+}
+
+test "table: rounded borders with header and alignment" {
+    var buf: [1024]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try writeTable(&w, &.{ "Name", "Qty" }, &.{
+        &.{ "apple", "3" },
+        &.{ "kiwi", "12" },
+    }, .{ .alignments = &.{ .left, .right } });
+    try std.testing.expectEqualStrings(
+        \\╭───────┬─────╮
+        \\│ Name  │ Qty │
+        \\├───────┼─────┤
+        \\│ apple │   3 │
+        \\│ kiwi  │  12 │
+        \\╰───────┴─────╯
+        \\
+    , w.buffered());
+}
+
+test "table: ascii, no header, row separators, ragged row" {
+    var buf: [1024]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try writeTable(&w, null, &.{
+        &.{ "a", "b" },
+        &.{"c"},
+    }, .{ .border = .ascii, .row_separators = true });
+    try std.testing.expectEqualStrings(
+        \\+---+---+
+        \\| a | b |
+        \\+---+---+
+        \\| c |   |
+        \\+---+---+
+        \\
+    , w.buffered());
+}
+
+test "table: utf-8 and ansi cells keep alignment" {
+    try std.testing.expectEqual(@as(usize, 4), displayWidth("café"));
+    try std.testing.expectEqual(@as(usize, 3), displayWidth(esc ++ "[1;31m" ++ "abc" ++ reset));
+
+    var buf: [1024]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try writeTable(&w, null, &.{
+        &.{"café"},
+        &.{esc ++ "[1mab" ++ reset},
+    }, .{ .border = .light });
+    try std.testing.expectEqualStrings(
+        "┌──────┐\n" ++
+            "│ café │\n" ++
+            "│ " ++ esc ++ "[1mab" ++ reset ++ "   │\n" ++
+            "└──────┘\n",
+        w.buffered(),
+    );
+}
+
+test "table: max_width truncates widest column" {
+    var buf: [1024]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try writeTable(&w, &.{ "id", "description" }, &.{
+        &.{ "1", "a very long description" },
+    }, .{ .max_width = 16 });
+    try std.testing.expectEqualStrings(
+        \\╭────┬─────────╮
+        \\│ id │ descri… │
+        \\├────┼─────────┤
+        \\│ 1  │ a very… │
+        \\╰────┴─────────╯
+        \\
+    , w.buffered());
+}
+
+test "table: empty table writes nothing" {
+    var buf: [16]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try writeTable(&w, null, &.{}, .{});
+    try std.testing.expectEqual(@as(usize, 0), w.buffered().len);
+}
+
 // Base color palettes
 pub const clay_palette = std.StaticStringMap(StyleOptions).initComptime(.{
     .{ "Header1", StyleOptions{ .text_color = .clay, .framed = true, .bold = true } },
@@ -293,6 +611,7 @@ pub const clay_palette = std.StaticStringMap(StyleOptions).initComptime(.{
     .{ "Field", StyleOptions{ .italic = true, .line_breaks = 0 } },
     .{ "Hint", StyleOptions{ .bold = true, .text_color = .clay, .line_breaks = 0 } },
     .{ "Error", StyleOptions{ .text_color = .red, .bold = true } },
+    .{ "Border", StyleOptions{ .text_color = .clay } },
 });
 pub const blueish_palette = std.StaticStringMap(StyleOptions).initComptime(.{
     .{ "Header1", StyleOptions{ .text_color = .cyan, .bg_color = .default, .framed = true } },
@@ -304,6 +623,7 @@ pub const blueish_palette = std.StaticStringMap(StyleOptions).initComptime(.{
     .{ "Field", StyleOptions{ .italic = true, .line_breaks = 0, .bg_color = .black } },
     .{ "Hint", StyleOptions{ .italic = true, .text_color = .cyan, .line_breaks = 0 } },
     .{ "Error", StyleOptions{ .text_color = .red, .bold = true } },
+    .{ "Border", StyleOptions{ .text_color = .cyan } },
 });
 
 pub const christmas_palette = std.StaticStringMap(StyleOptions).initComptime(.{
@@ -316,6 +636,7 @@ pub const christmas_palette = std.StaticStringMap(StyleOptions).initComptime(.{
     .{ "Field", StyleOptions{ .text_color = .red, .italic = true, .line_breaks = 0, .bg_color = .black } },
     .{ "Hint", StyleOptions{ .italic = true, .text_color = .green, .line_breaks = 0 } },
     .{ "Error", StyleOptions{ .text_color = .red, .bold = true } },
+    .{ "Border", StyleOptions{ .text_color = .green } },
 });
 
 pub const forest_palette = std.StaticStringMap(StyleOptions).initComptime(.{
@@ -325,6 +646,7 @@ pub const forest_palette = std.StaticStringMap(StyleOptions).initComptime(.{
     .{ "Field", StyleOptions{ .text_color = .green, .italic = true, .line_breaks = 0, .bg_color = .black } },
     .{ "Hint", StyleOptions{ .italic = true, .text_color = .green, .line_breaks = 0 } },
     .{ "Error", StyleOptions{ .text_color = .red, .bold = true } },
+    .{ "Border", StyleOptions{ .text_color = .green, .dim = true } },
 });
 
 pub const palettes = std.StaticStringMap(std.StaticStringMap(StyleOptions)).initComptime(.{
