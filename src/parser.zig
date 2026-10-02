@@ -219,14 +219,7 @@ pub fn formatDefaultValue(comptime T: type, comptime default_value: *const anyop
     const format = comptime switch (@typeInfo(T)) {
         .int, .float => "{d}",
         // .Enum => |choices| formatChoices(choices.fields), //TODO fix
-        .@"enum" => |e| {
-            for (0.., e.field_names) |i, name| {
-                if (@as(T, @enumFromInt(e.field_values[i])) == default) {
-                    return name;
-                }
-                @compileError("Internal error: failed to find default for enum");
-            }
-        },
+        .@"enum" => "{t}",
         .optional => {
             if (default != null) {
                 @compileError(
@@ -247,6 +240,17 @@ test "format default string values" {
     const option_field = comptime structFields(Options)[0];
     const default_name = formatDefaultValue(option_field.type, option_field.default_value_ptr.?);
     try std.testing.expectEqualStrings("Bob", default_name);
+}
+
+test "format enum default that is not the first field" {
+    const Manager = enum { npm, mpm, pnpm };
+    const Options = struct {
+        manager: Manager = .mpm,
+        last: Manager = .pnpm,
+    };
+    const fields = comptime structFields(Options);
+    try std.testing.expectEqualStrings("mpm", formatDefaultValue(fields[0].type, fields[0].default_value_ptr.?));
+    try std.testing.expectEqualStrings("pnpm", formatDefaultValue(fields[1].type, fields[1].default_value_ptr.?));
 }
 
 test "format default non-string values" {
