@@ -1,5 +1,6 @@
 /// Some stdout styling
 const std = @import("std");
+const builtin = @import("builtin");
 const File = std.fs.File;
 const Writer = File.Writer;
 const NullWriter = std.io.NullWriter;
@@ -25,6 +26,47 @@ const italic = esc ++ "[3m";
 const underline = esc ++ "[4m";
 
 const reset = esc ++ "[0m";
+
+const win32 = if (builtin.os.tag == .windows) struct {
+    const windows = std.os.windows;
+
+    const STD_OUTPUT_HANDLE: windows.DWORD = @bitCast(@as(i32, -11));
+    const ENABLE_VIRTUAL_TERMINAL_PROCESSING: windows.DWORD = 0x0004;
+    const CP_UTF8: windows.UINT = 65001;
+
+    extern "kernel32" fn GetStdHandle(nStdHandle: windows.DWORD) callconv(.winapi) ?windows.HANDLE;
+    extern "kernel32" fn GetConsoleMode(hConsoleHandle: windows.HANDLE, lpMode: *windows.DWORD) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn SetConsoleMode(hConsoleHandle: windows.HANDLE, dwMode: windows.DWORD) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn SetConsoleOutputCP(wCodePageID: windows.UINT) callconv(.winapi) windows.BOOL;
+} else struct {};
+
+/// Best-effort terminal setup for `file` (typically stdout/stderr): enables
+/// ANSI escape code interpretation and, on Windows, switches the console's
+/// output code page to UTF-8.
+///
+/// Without this, on a plain Windows console (cmd.exe / legacy conhost):
+/// - SGR escape sequences (colors, bold, ...) print as literal garbage
+///   instead of being interpreted, since Virtual Terminal Processing is
+///   off by default there.
+/// - the UTF-8 box-drawing glyphs used for table borders get decoded
+///   under the legacy code page, splitting each multi-byte glyph into
+///   several wrong single-byte characters and breaking column alignment.
+///
+/// Safe to call even when `file` is not a terminal (e.g. redirected
+/// output) or on platforms where none of this applies: failures are
+/// silently ignored.
+pub fn enableTerminalSupport(io: std.Io, file: std.Io.File) void {
+    file.enableAnsiEscapeCodes(io) catch {};
+    if (builtin.os.tag != .windows) return;
+
+    if (win32.GetStdHandle(win32.STD_OUTPUT_HANDLE)) |handle| {
+        var mode: win32.windows.DWORD = 0;
+        if (win32.GetConsoleMode(handle, &mode).toBool()) {
+            _ = win32.SetConsoleMode(handle, mode | win32.ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+        }
+    }
+    _ = win32.SetConsoleOutputCP(win32.CP_UTF8);
+}
 
 const max_ansi_color_code_len = 16;
 const AnsiColorCodes = enum(u16) {

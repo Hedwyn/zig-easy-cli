@@ -1250,7 +1250,9 @@ pub fn CliParser(comptime ctx: CliContext) type {
         ) !?Self {
             comptime argSanityCheck(structFields(ArgT));
             var err_payload: ParamErrPayload = .{};
-            var file_writer = std.Io.File.stdout().writer(io, &.{});
+            const stdout = std.Io.File.stdout();
+            if (custom_writer == null) styling.enableTerminalSupport(io, stdout);
+            var file_writer = stdout.writer(io, &.{});
             const writer: *std.Io.Writer = if (custom_writer) |w| w else &file_writer.interface;
             var params = Self.parse(custom_arg_it, &err_payload) catch |e| {
                 displayError(e, err_payload, writer);
