@@ -4,10 +4,12 @@ const styling = @import("styling");
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
+    const stdout = std.Io.File.stdout();
+    styling.enableTerminalSupport(io, stdout);
     var buf: [4096]u8 = undefined;
-    var file_writer = std.Io.File.stdout().writer(io, &buf);
+    var file_writer = stdout.writer(io, &buf);
     const out = &file_writer.interface;
-    const interactive = try std.Io.File.stdout().isTty(io);
+    const interactive = try stdout.isTty(io);
 
     const rich: styling.RichWriter = .{
         .writer = out,

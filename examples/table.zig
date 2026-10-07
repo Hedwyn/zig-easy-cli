@@ -3,8 +3,10 @@ const std = @import("std");
 const styling = @import("styling");
 
 pub fn main(init: std.process.Init) !void {
+    const stdout = std.Io.File.stdout();
+    styling.enableTerminalSupport(init.io, stdout);
     var buf: [4096]u8 = undefined;
-    var file_writer = std.Io.File.stdout().writer(init.io, &buf);
+    var file_writer = stdout.writer(init.io, &buf);
     const out = &file_writer.interface;
 
     const headers = [_][]const u8{ "Package", "Version", "Size (KB)", "Status" };
