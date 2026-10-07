@@ -118,7 +118,7 @@ zig build examples subcmd -- --help
 >>> subcmd {subcmd}
 
 === Arguments ===
-subcmd: (subcommand) whoami
+subcmd: (subcommand) whoami    [default:whoami]
 ```
 
 ## secret
@@ -324,7 +324,27 @@ const MainArg = struct {
 };
 ```
 
-Note that subcommands is the **only** valid use of Tagged Unions as field for the parser. They must be wrapped with Optional, to get defined behavior when the user forgets to pass the subcommand. Using anything that's not a `CliParser(...)` type as variant type will raise a compile-time error.
+Note that subcommands is the **only** valid use of Tagged Unions as field for the parser. Using anything that's not a `CliParser(...)` type as variant type will raise a compile-time error.
+
+The subcommand field may be optional, in which case it is `null` when the user does not pass any subcommand. If it is not optional, the subcommand is mandatory, unless a default subcommand is defined.
+
+## Default subcommand
+
+A subcommand can be designated as the default one, invoked when no subcommand is passed explicitly, by declaring `default` on the union:
+
+```zig
+const Subcommands = union(enum) {
+    whoami: easycli.CliParser(...),
+    status: easycli.CliParser(...),
+    pub const default = .status;
+};
+
+const MainArg = struct {
+    subcmd: Subcommands, // always set, no need for an optional
+};
+```
+
+With the definition above, `mytool` runs `mytool status`. The default subcommand is only used when nothing is passed for a subcommand: options of the main parser and builtin options can still be passed (e.g. `mytool --quiet`), but arguments or options of the default subcommand require naming it explicitly (`mytool status ...`). An argument that does not match any subcommand name is reported as an unknown subcommand.
 
 # Comparison with existing projects for CLI tools
 

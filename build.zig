@@ -56,6 +56,7 @@ pub fn build(b: *std.Build) void {
         });
         example.root_module.addImport("parser", parser_module);
         example.root_module.addImport("styling", styling_module);
+        b.installArtifact(example);
         const run_example_step = b.step(example_name, "Run " ++ example_name);
         const example_run = b.addRunArtifact(example);
         run_example_step.dependOn(&example_run.step);

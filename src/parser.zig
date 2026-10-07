@@ -198,7 +198,8 @@ pub fn getTypeName(comptime T: type) []const u8 {
         .int => "integer",
         .float => "float",
         .@"enum" => |choices| formatEnumChoices(choices),
-        .@"union" => |choices| "(subcommand) " ++ formatUnionChoices(choices),
+        .@"union" => |choices| "(subcommand) " ++ formatUnionChoices(choices) ++
+            (if (getDefaultSubcommand(T)) |default| "    [default:" ++ default ++ "]" else ""),
         .optional => |opt| "(Optional) " ++ getTypeName(opt.child),
         else => unreachable,
     };
@@ -647,6 +648,26 @@ pub fn getSubparserFields(field_type: type) ?[]const UnionField {
     };
 }
 
+/// Returns the name of the subcommand to run when none is passed explicitly,
+/// declared on the subcommands union as `pub const default = .name;`
+pub fn getDefaultSubcommand(comptime U: type) ?[]const u8 {
+    if (!@hasDecl(U, "default")) {
+        return null;
+    }
+    const name = @tagName(U.default);
+    if (!@hasField(U, name)) {
+        @compileError("Default subcommand `" ++ name ++ "` is not a variant of " ++ @typeName(U));
+    }
+    return name;
+}
+
+/// Argument iterator with nothing left to yield
+const EmptyArgIterator = struct {
+    pub fn next(_: *EmptyArgIterator) ?[]const u8 {
+        return null;
+    }
+};
+
 /// Compile-time checks on argument fields
 /// Verifies that no more than one subcommand is defined
 pub fn argSanityCheck(arg_fields: []const StructField) void {
@@ -698,21 +719,60 @@ pub fn CliParser(comptime ctx: CliContext) type {
         ) CliError!void {
             inline for (comptime structFields(ArgT)) |arg| {
                 if (std.mem.eql(u8, cmd_name, arg.name)) {
-                    const maybe_fields = comptime getSubparserFields(arg.type);
-                    const fields = maybe_fields orelse return;
-                    inline for (fields) |f| {
+                    const maybe_subparser_type = comptime getSubparserType(arg.type);
+                    const U = maybe_subparser_type orelse return;
+                    inline for (comptime unionFields(U)) |f| {
                         if (std.mem.eql(u8, cmd_value, f.name)) {
-                            @field(self.args, arg.name) = @unionInit(getSubparserType(arg.type).?, f.name, undefined);
-                            return try @field(@field(self.args, arg.name).?, f.name).parseInternal(
-                                arg_it,
-                                error_payload,
-                                self.builtin.cli_name,
-                            );
+                            return self.startSubparser(arg.name, f.name, arg_it, error_payload);
                         }
+                    }
+                    if (error_payload) |p| {
+                        p.value_str = cmd_value;
+                        p.field_name = arg.name;
                     }
                     return CliError.UnknownSubcommand;
                 }
             }
+        }
+
+        /// Activates the variant `tag` of the subcommand field `arg_name`
+        /// and lets its parser consume the remaining arguments from `arg_it`
+        fn startSubparser(
+            self: *Self,
+            comptime arg_name: []const u8,
+            comptime tag: []const u8,
+            arg_it: anytype,
+            error_payload: ?*ParamErrPayload,
+        ) CliError!void {
+            const U = comptime getSubparserType(@FieldType(ArgT, arg_name)).?;
+            var subcmd = @unionInit(U, tag, undefined);
+            try @field(subcmd, tag).parseInternal(arg_it, error_payload, self.builtin.cli_name);
+            @field(self.args, arg_name) = subcmd;
+        }
+
+        /// Runs the default subcommand, if any, when none was passed explicitly
+        /// Returns whether the subcommand field has been set
+        fn startDefaultSubparser(self: *Self, error_payload: ?*ParamErrPayload) CliError!bool {
+            inline for (comptime structFields(ArgT)) |arg| {
+                const maybe_subparser_type = comptime getSubparserType(arg.type);
+                if (comptime maybe_subparser_type != null) {
+                    const U = maybe_subparser_type.?;
+                    if (comptime getDefaultSubcommand(U)) |tag| {
+                        if (self.builtin.help) {
+                            // Only the parent help gets displayed: the default subcommand
+                            // is not parsed so that its mandatory arguments are not enforced
+                            var subcmd = @unionInit(U, tag, undefined);
+                            @field(subcmd, tag).initEmpty(self.builtin.cli_name);
+                            @field(self.args, arg.name) = subcmd;
+                        } else {
+                            var no_args = EmptyArgIterator{};
+                            try self.startSubparser(arg.name, tag, &no_args, error_payload);
+                        }
+                        return true;
+                    }
+                }
+            }
+            return false;
         }
 
         pub fn isSubcommand(cmd_name: []const u8) bool {
@@ -881,10 +941,6 @@ pub fn CliParser(comptime ctx: CliContext) type {
             error_payload: ?*ParamErrPayload,
             pname: ?[]const u8,
         ) CliError!void {
-            initDefaults(OptionT, &(self.options));
-            initDefaults(ArgT, &(self.args));
-            initDefaults(BuiltinOptions, &(self.builtin));
-
             var arg_cnt: usize = 0;
             const _arg_field_count = @typeInfo(ArgT).@"struct".field_names.len;
             var passed_args: [_arg_field_count][]const u8 = undefined;
@@ -893,13 +949,14 @@ pub fn CliParser(comptime ctx: CliContext) type {
             var flag_type: ?FlagType = null;
             var current_arg_name: []const u8 = "";
             var arg_idx: usize = 0;
+            var subcmd_seen = false;
 
             // If no explicit client name was passed,using process name
             if (pname) |name| {
-                self.builtin.cli_name = ctx.name orelse name;
+                self.initEmpty(name);
             } else {
                 const process_name: []const u8 = arg_it.next() orelse panic("Process name is missing from arguments", .{});
-                self.builtin.cli_name = ctx.name orelse getPathBasename(process_name);
+                self.initEmpty(getPathBasename(process_name));
             }
             var next_arg = arg_it.next();
             var consume = true;
@@ -914,6 +971,11 @@ pub fn CliParser(comptime ctx: CliContext) type {
                     // TODO: replace with simple boolean check, get rid of subparsers var
                     if (isSubcommand(current_arg_name)) {
                         try self.runSubparser(current_arg_name, arg, arg_it, error_payload);
+                        subcmd_seen = true;
+                        if (comptime _arg_field_count > 0) {
+                            passed_args[arg_cnt] = current_arg_name;
+                        }
+                        arg_cnt += 1;
                         continue;
                     }
                     // Only positional arguments are tracked in `passed_args`;
@@ -1001,9 +1063,34 @@ pub fn CliParser(comptime ctx: CliContext) type {
                     },
                 }
             }
+            if (!subcmd_seen and try self.startDefaultSubparser(error_payload)) {
+                if (comptime getSubcommandFieldName()) |subcmd_name| {
+                    passed_args[arg_cnt] = subcmd_name;
+                    arg_cnt += 1;
+                }
+            }
             if (!self.builtin.help) {
                 try checkMandatoryArgsPresence(passed_args[0..arg_cnt], error_payload);
             }
+        }
+
+        /// Resets all parameters to their default values,
+        /// `pname` is used as client name unless one was given in the context
+        pub fn initEmpty(self: *Self, pname: ?[]const u8) void {
+            initDefaults(OptionT, &(self.options));
+            initDefaults(ArgT, &(self.args));
+            initDefaults(BuiltinOptions, &(self.builtin));
+            self.builtin.cli_name = ctx.name orelse pname;
+        }
+
+        /// Name of the argument field holding the subcommand, if any
+        fn getSubcommandFieldName() ?[]const u8 {
+            for (structFields(ArgT)) |arg| {
+                if (getSubparserType(arg.type) != null) {
+                    return arg.name;
+                }
+            }
+            return null;
         }
 
         pub fn checkMandatoryArgsPresence(passed_args: [][]const u8, err_payload: ?*ParamErrPayload) CliError!void {
@@ -1138,10 +1225,11 @@ pub fn CliParser(comptime ctx: CliContext) type {
                 return true;
             }
             inline for (comptime structFields(ArgT)) |arg| {
-                if (comptime getSubparserFields(arg.type)) |_| {
-                    // if arg is subparser it is a union by design
-                    // TODO: fix for case of non-optional subcommands
-                    if (@field(self.args, arg.name)) |subparser| {
+                if (comptime getSubparserType(arg.type)) |U| {
+                    // if arg is subparser it is a union by design,
+                    // which may or may not be wrapped in an optional
+                    const maybe_subparser: ?U = @field(self.args, arg.name);
+                    if (maybe_subparser) |subparser| {
                         switch (subparser) {
                             inline else => |*parser| {
                                 if (parser.builtin.help) {
@@ -1233,6 +1321,10 @@ pub fn CliParser(comptime ctx: CliContext) type {
                     const param_name = err_payload.get_field_name();
                     const param_value = err_payload.get_value_str();
                     rich.richPrint("Choice `{s}` for `{s}` is invalid", .Error, .{ param_value, param_name });
+                },
+                ParameterError.UnknownSubcommand => {
+                    const param_value = err_payload.get_value_str();
+                    rich.richPrint("Subcommand `{s}` is unknown", .Error, .{param_value});
                 },
                 ParameterError.UnknownPalette => {
                     const param_value = err_payload.get_value_str();
@@ -1390,4 +1482,109 @@ test "parse from JSON" {
         .opts = Options,
     }).loadFromJson(json_string, std.testing.allocator);
     try std.testing.expectEqualStrings("dummy", params.options.arg_1.?);
+}
+
+const TestRunParser = CliParser(.{ .args = struct { target: ?[]const u8 = null } });
+const TestBuildParser = CliParser(.{
+    .args = struct { target: []const u8 },
+    .opts = struct { release: bool = false },
+});
+
+test "parse explicit subcommand" {
+    const Subcommands = union(enum) { run: TestRunParser, build: TestBuildParser };
+    var arguments = std.mem.splitSequence(u8, "testcli build app --release", " ");
+    const params = try CliParser(.{ .args = struct { subcmd: ?Subcommands = null } }).parse(&arguments, null);
+    try std.testing.expectEqualStrings("app", params.args.subcmd.?.build.args.target);
+    try std.testing.expect(params.args.subcmd.?.build.options.release);
+}
+
+test "parse non-optional subcommand" {
+    const Subcommands = union(enum) { run: TestRunParser, build: TestBuildParser };
+    const Parser = CliParser(.{ .args = struct { subcmd: Subcommands } });
+    var arguments = std.mem.splitSequence(u8, "testcli run app", " ");
+    const params = try Parser.parse(&arguments, null);
+    try std.testing.expectEqualStrings("app", params.args.subcmd.run.args.target.?);
+
+    var no_subcmd = std.mem.splitSequence(u8, "testcli", " ");
+    try std.testing.expectError(CliError.MissingArgument, Parser.parse(&no_subcmd, null));
+}
+
+test "parse unknown subcommand" {
+    const Subcommands = union(enum) { run: TestRunParser, build: TestBuildParser };
+    var arguments = std.mem.splitSequence(u8, "testcli deploy", " ");
+    var payload: ParamErrPayload = .{};
+    try std.testing.expectError(
+        CliError.UnknownSubcommand,
+        CliParser(.{ .args = struct { subcmd: ?Subcommands = null } }).parse(&arguments, &payload),
+    );
+    try std.testing.expectEqualStrings("deploy", payload.get_value_str());
+}
+
+test "default subcommand runs when none is passed" {
+    const Subcommands = union(enum) {
+        build: TestBuildParser,
+        run: TestRunParser,
+        pub const default = .run;
+    };
+    const Options = struct { verbose: bool = false };
+    inline for (.{ ?Subcommands, Subcommands }) |SubcmdT| {
+        const Parser = CliParser(.{ .args = struct { subcmd: SubcmdT }, .opts = Options });
+        var arguments = std.mem.splitSequence(u8, "testcli --verbose", " ");
+        const params = try Parser.parse(&arguments, null);
+        const maybe_subcmd: ?Subcommands = params.args.subcmd;
+        const subcmd = maybe_subcmd.?;
+        try std.testing.expect(params.options.verbose);
+        try std.testing.expectEqual(null, subcmd.run.args.target);
+        try std.testing.expectEqualStrings("testcli", subcmd.run.builtin.cli_name.?);
+    }
+}
+
+test "default subcommand does not override explicit one" {
+    const Subcommands = union(enum) {
+        build: TestBuildParser,
+        run: TestRunParser,
+        pub const default = .run;
+    };
+    var arguments = std.mem.splitSequence(u8, "testcli build app", " ");
+    const params = try CliParser(.{ .args = struct { subcmd: Subcommands } }).parse(&arguments, null);
+    try std.testing.expectEqualStrings("app", params.args.subcmd.build.args.target);
+}
+
+test "default subcommand is not used when subcommand arguments are passed" {
+    const Subcommands = union(enum) {
+        build: TestBuildParser,
+        run: TestRunParser,
+        pub const default = .run;
+    };
+    const Parser = CliParser(.{ .args = struct { subcmd: Subcommands } });
+    var arguments = std.mem.splitSequence(u8, "testcli app", " ");
+    try std.testing.expectError(CliError.UnknownSubcommand, Parser.parse(&arguments, null));
+
+    var flag_args = std.mem.splitSequence(u8, "testcli --release", " ");
+    try std.testing.expectError(CliError.UnknownOption, Parser.parse(&flag_args, null));
+}
+
+test "default subcommand mandatory arguments are not enforced on parent help" {
+    const Subcommands = union(enum) {
+        run: TestRunParser,
+        build: TestBuildParser,
+        pub const default = .build;
+    };
+    const Parser = CliParser(.{ .args = struct { subcmd: Subcommands } });
+    var help_args = std.mem.splitSequence(u8, "testcli --help", " ");
+    const params = try Parser.parse(&help_args, null);
+    try std.testing.expect(params.builtin.help);
+    try std.testing.expect(params.args.subcmd == .build);
+
+    var no_args = std.mem.splitSequence(u8, "testcli", " ");
+    try std.testing.expectError(CliError.MissingArgument, Parser.parse(&no_args, null));
+}
+
+test "default subcommand in help" {
+    const Subcommands = union(enum) {
+        run: TestRunParser,
+        build: TestBuildParser,
+        pub const default = .build;
+    };
+    try std.testing.expectEqualStrings("(subcommand) run|build    [default:build]", getTypeName(Subcommands));
 }

@@ -9,7 +9,7 @@ const WhoamiOptions = struct {
     grade: enum { Employee, Boss } = .Employee,
     secret: ?[]const u8 = null,
 };
-const WhoamiArg = struct { name: ?[]const u8 };
+const WhoamiArg = struct { name: ?[]const u8 = null };
 
 const Subcommands = union(enum) {
     whoami: easycli.CliParser(
@@ -20,10 +20,12 @@ const Subcommands = union(enum) {
             .args_info = &arg_doc,
         },
     ),
+    // `subcmd` alone is handled as `subcmd whoami`
+    pub const default = .whoami;
 };
 
 const MainArg = struct {
-    subcmd: ?Subcommands = null,
+    subcmd: Subcommands,
 };
 
 const options_doc = [_]OptionInfo{
@@ -65,11 +67,7 @@ pub const ParserT = easycli.CliParser(.{
 
 pub fn main(init: std.process.Init) !void {
     const main_params = if (try ParserT.runStandalone(init)) |p| p else return;
-    const subcmd = main_params.args.subcmd orelse {
-        std.debug.print("You must provide a subcommand !\n", .{});
-        return;
-    };
-    const params = switch (subcmd) {
+    const params = switch (main_params.args.subcmd) {
         .whoami => |p| p,
     };
     handleWhoami(params);
