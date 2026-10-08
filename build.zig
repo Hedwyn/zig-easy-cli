@@ -26,7 +26,15 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const styling_module = b.addModule("styling", .{ .root_source_file = b.path("src/styling.zig") });
+    const interactive_module = b.addModule("interactive", .{
+        .root_source_file = b.path("src/interactive.zig"),
+    });
+    const styling_module = b.addModule("styling", .{
+        .root_source_file = b.path("src/styling.zig"),
+        .imports = &.{
+            .{ .name = "interactive", .module = interactive_module },
+        },
+    });
     const mod = b.addModule("zig-easy-cli", .{
         .root_source_file = b.path("src/parser.zig"),
         .target = target,
@@ -39,9 +47,6 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "styling", .module = styling_module },
         },
-    });
-    const interactive_module = b.addModule("interactive", .{
-        .root_source_file = b.path("src/interactive.zig"),
     });
 
     const examples_step = b.step("examples", "Run examples");
@@ -86,6 +91,9 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/styling.zig"),
             .target = target,
+            .imports = &.{
+                .{ .name = "interactive", .module = interactive_module },
+            },
         }),
     });
 

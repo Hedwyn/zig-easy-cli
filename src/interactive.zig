@@ -2,7 +2,7 @@
 //!
 const std = @import("std");
 
-const InteractiveErrors = error{IncorrectChoice};
+pub const InteractiveErrors = error{IncorrectChoice};
 
 pub fn OptionsParser(T: type, default: ?T) type {
     const info = switch (@typeInfo(T)) {

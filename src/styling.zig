@@ -1,6 +1,7 @@
 /// Some stdout styling
 const std = @import("std");
 const builtin = @import("builtin");
+const interactive = @import("interactive");
 const File = std.fs.File;
 const Writer = File.Writer;
 const NullWriter = std.io.NullWriter;
@@ -306,6 +307,44 @@ pub const RichWriter = struct {
         const prompt = try std.fmt.allocPrint(allocator, format, args);
         defer allocator.free(prompt);
         return readInput(allocator, reader, self.writer, prompt, self.inputOptions(options));
+    }
+
+    /// Prompts for one of `T`'s enum values. Like `RichWriter.getInput`, the
+    /// prompt is formatted with `format`/`args`, styled with the palette's
+    /// `Field` style, but it's followed by the choices hint from
+    /// `interactive.OptionsParser(T, default).getHint()` (e.g. "(yes/no) [yes]"),
+    /// and the line is re-prompted (styled with `Error`) until it names one of
+    /// `T`'s fields, or is left empty when `default` is non-null.
+    ///
+    /// Returns `error.EndOfStream` when `reader` is exhausted (Python's `EOFError`).
+    pub fn getInputWithChoices(
+        self: RichWriter,
+        comptime T: type,
+        comptime default: ?T,
+        allocator: Allocator,
+        reader: *std.Io.Reader,
+        comptime format: []const u8,
+        args: anytype,
+        options: InputOptions,
+    ) (InputError || Allocator.Error)!T {
+        const Parser = interactive.OptionsParser(T, default);
+
+        const prompt = try std.fmt.allocPrint(allocator, format ++ " {s}", args ++ .{Parser.getHint()});
+        defer allocator.free(prompt);
+
+        const validateChoice = struct {
+            fn call(line: []const u8) ?[]const u8 {
+                _ = Parser.parse(line) catch return "Please answer with one of " ++ comptime Parser.getHint();
+                return null;
+            }
+        }.call;
+
+        var opts = options;
+        opts.validate = validateChoice;
+
+        const line = try promptLine(reader, self.writer, prompt, self.inputOptions(opts));
+        // `validateChoice` already confirmed `line` parses, so this cannot fail
+        return Parser.parse(line) catch unreachable;
     }
 
     /// Same as `RichWriter.getInput`, but copies the line into `buf` instead of allocating.
@@ -754,10 +793,10 @@ pub const ProgressBar = struct {
 
     /// Prints a line of text above the bar, then redraws the bar below it
     pub fn log(self: *ProgressBar, comptime format: []const u8, args: anytype) !void {
-        const interactive = self.started and self.options.interactive;
-        if (interactive) try self.writer.writeAll(clear_line_seq);
+        const is_interactive = self.started and self.options.interactive;
+        if (is_interactive) try self.writer.writeAll(clear_line_seq);
         try self.writer.print(format ++ "\n", args);
-        if (interactive) {
+        if (is_interactive) {
             self.last_drawn = null;
             try self.draw();
         }
