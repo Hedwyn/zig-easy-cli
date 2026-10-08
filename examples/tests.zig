@@ -35,32 +35,14 @@ const Example = enum {
 
     pub fn all() []const Example {
         const examples = comptime blk: {
-            const fields = std.meta.fields(Example);
-            var variants: [fields.len]Example = undefined;
-            for (0.., fields) |i, field| {
-                variants[i] = @enumFromInt(field.value);
-            }
+            const values = std.enums.values(Example);
+            var variants: [values.len]Example = undefined;
+            for (0.., values) |i, value| variants[i] = value;
             break :blk variants;
         };
         return &examples;
     }
 };
-
-const BufferWriterError = error {BufferFull};
-const BufContext = struct {buf: []u8, cursor: usize = 0};
-
-pub fn writeToBuf(ctx: *BufContext, bytes : []const u8) BufferWriterError!usize {
-    const next_cursor = ctx.cursor + bytes.len;
-    if (next_cursor > ctx.buf.len) {
-        return BufferWriterError.BufferFull;
-    }
-    for (0.., bytes) |i, byte| {
-        ctx.buf[ctx.cursor + i] = byte;
-    }
-    ctx.cursor = next_cursor;
-    return bytes.len;
-}
-const BufferWriter = std.io.GenericWriter(*BufContext, BufferWriterError, writeToBuf);
 
 pub fn generatePrompts(comptime example: Example) []const []const u8 {
     _ = example;
@@ -101,27 +83,25 @@ const MainArg = struct {
     subcmd: ?Subcommands = null,
 };
 
-fn takeExampleSnapshot(comptime example: Example, output_name: []const u8, prompt: []const u8) !void {
-    const out = try std.fs.cwd().createFile(output_name, .{});
-    const writer = out.writer();
+fn takeExampleSnapshot(io: std.Io, comptime example: Example, output_name: []const u8, prompt: []const u8) !void {
+    const out = try std.Io.Dir.cwd().createFile(io, output_name, .{});
+    defer out.close(io);
+    var file_buf: [cmd_output_max_size]u8 = undefined;
+    var file_writer = out.writer(io, &file_buf);
     const ParserT = comptime getCliParser(example);
     var arg_it = std.mem.splitSequence(u8, prompt, " ");
-    _ = try ParserT.runStandaloneWithOptions(std.fs.File.Writer, &arg_it, writer);
+    _ = try ParserT.runStandaloneWithOptions(io, &arg_it, &file_writer.interface);
+    try file_writer.interface.flush();
 }
 
-
-fn testExampleSnapshot(comptime example: Example, prompt: []const u8, expected: []const u8) !void {
-    var buf = [_]u8{0} ** cmd_output_max_size;
-    var buf_ctx: BufContext = .{.buf = &buf};
-    const writer: BufferWriter = .{.context = &buf_ctx};
+fn testExampleSnapshot(io: std.Io, comptime example: Example, prompt: []const u8, expected: []const u8) !void {
+    var buf: [cmd_output_max_size]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
     const ParserT = comptime getCliParser(example);
     var arg_it = std.mem.splitSequence(u8, prompt, " ");
-    _ = try ParserT.runStandaloneWithOptions(BufferWriter, &arg_it, writer);
-    // TODO: fix
-    // std.debug.assert(buf_ctx.cursor == expected.len);
-    // for (0..buf_ctx.cursor) |i| {
-    //     std.debug.assert(buf[i] == expected[i]);
-    // }
+    _ = try ParserT.runStandaloneWithOptions(io, &arg_it, &writer);
+    // TODO: compare `writer.buffered()` with `expected` once snapshots are stable
+    _ = expected;
 }
 
 fn convertPromptToFilename(comptime prompt: []const u8) []const u8 {
@@ -140,9 +120,8 @@ fn convertPromptToFilename(comptime prompt: []const u8) []const u8 {
     return &literal;
 }
 
-pub fn takeSnapshot(options: SnapshotOptions) void {
-    inline for (std.meta.fields(Example)) |field| {
-        const target: Example = @enumFromInt(field.value);
+pub fn takeSnapshot(io: std.Io, options: SnapshotOptions) void {
+    inline for (std.enums.values(Example)) |target| {
         var is_target: bool = true;
         if (options.example) |example| {
             is_target = (example == target);
@@ -157,7 +136,7 @@ pub fn takeSnapshot(options: SnapshotOptions) void {
                     @tagName(target),
                     fname,
                 }) catch unreachable;
-                takeExampleSnapshot(target, output_name, prompt) catch unreachable;
+                takeExampleSnapshot(io, target, output_name, prompt) catch unreachable;
                 std.debug.print("Snapshot written at {s}\n", .{output_name});
             }
         }
@@ -165,9 +144,8 @@ pub fn takeSnapshot(options: SnapshotOptions) void {
     return;
 }
 
-pub fn testSnapshot(options: SnapshotOptions) void {
-    inline for (std.meta.fields(Example)) |field| {
-        const target: Example = @enumFromInt(field.value);
+pub fn testSnapshot(io: std.Io, options: SnapshotOptions) void {
+    inline for (std.enums.values(Example)) |target| {
         var is_target: bool = true;
         if (options.example) |example| {
             is_target = (example == target);
@@ -183,26 +161,26 @@ pub fn testSnapshot(options: SnapshotOptions) void {
                     @tagName(target),
                     fname,
                 }) catch unreachable;
-                const expected = std.fs.cwd().readFile(snapshot_path, &fcontent_buf) catch unreachable;
-                testExampleSnapshot(target, snapshot_path, expected) catch unreachable;
+                const expected = std.Io.Dir.cwd().readFile(io, snapshot_path, &fcontent_buf) catch unreachable;
+                testExampleSnapshot(io, target, snapshot_path, expected) catch unreachable;
             }
         }
     }
     return;
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     const ParserT = easycli.CliParser(.{
         .args = MainArg,
     });
-    const main_params = if (try ParserT.runStandalone()) |p| p else return;
+    const main_params = if (try ParserT.runStandalone(init)) |p| p else return;
     const cmd = main_params.args.subcmd orelse {
         std.debug.print("You must provide a subcommand !", .{});
         return;
     };
     switch (cmd) {
-        .take_snapshot => |p| takeSnapshot(p.options),
-        .test_snapshots => |p| testSnapshot(p.options),
+        .take_snapshot => |p| takeSnapshot(init.io, p.options),
+        .test_snapshots => |p| testSnapshot(init.io, p.options),
 
     }
 }

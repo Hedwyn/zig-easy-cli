@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const File = std.fs.File;
 const Writer = File.Writer;
 const NullWriter = std.io.NullWriter;
+const Allocator = std.mem.Allocator;
 
 const WriteError = File.WriteError;
 const panic = std.debug.panic;
@@ -286,6 +287,45 @@ pub const RichWriter = struct {
             if (Style.Border.lookupStyle(self.palette)) |s| opts.fill_color = s.text_color;
         }
         return ProgressBar.init(self.writer, opts);
+    }
+
+    /// Prompts for a line of input, like Python's `input()`. The prompt is
+    /// formatted with `format`/`args`, styled with the palette's `Field` style,
+    /// the default value hint with `Hint`, and validation errors with `Error`
+    /// unless `options` overrides them. The caller owns the returned slice.
+    ///
+    /// Returns `error.EndOfStream` when `reader` is exhausted (Python's `EOFError`).
+    pub fn getInput(
+        self: RichWriter,
+        allocator: Allocator,
+        reader: *std.Io.Reader,
+        comptime format: []const u8,
+        args: anytype,
+        options: InputOptions,
+    ) (InputError || Allocator.Error)![]u8 {
+        const prompt = try std.fmt.allocPrint(allocator, format, args);
+        defer allocator.free(prompt);
+        return readInput(allocator, reader, self.writer, prompt, self.inputOptions(options));
+    }
+
+    /// Same as `RichWriter.getInput`, but copies the line into `buf` instead of allocating.
+    /// Returns `error.NoSpaceLeft` if the line does not fit.
+    pub fn getInputBuf(
+        self: RichWriter,
+        buf: []u8,
+        reader: *std.Io.Reader,
+        prompt: []const u8,
+        options: InputOptions,
+    ) (InputError || error{NoSpaceLeft})![]u8 {
+        return readInputBuf(buf, reader, self.writer, prompt, self.inputOptions(options));
+    }
+
+    fn inputOptions(self: RichWriter, options: InputOptions) InputOptions {
+        var opts = options;
+        if (opts.prompt_style == null) opts.prompt_style = Style.Field.lookupStyle(self.palette);
+        if (opts.hint_style == null) opts.hint_style = Style.Hint.lookupStyle(self.palette);
+        if (opts.error_style == null) opts.error_style = Style.Error.lookupStyle(self.palette);
+        return opts;
     }
 
     pub fn richPrint(self: RichWriter, comptime format: []const u8, style: Style, args: anytype) void {
@@ -869,6 +909,220 @@ test "progress bar: finish restores the cursor, non-interactive prints one line"
     try plain.set(2);
     try plain.finish();
     try std.testing.expectEqualStrings("Copy 100% (4/4)\n", w.buffered());
+}
+
+pub const InputError = error{
+    /// The reader is exhausted (Python's `EOFError`)
+    EndOfStream,
+    /// The line does not fit in the reader's buffer
+    StreamTooLong,
+    ReadFailed,
+    WriteFailed,
+    /// `max_attempts` invalid answers were given
+    TooManyAttempts,
+};
+
+pub const InputOptions = struct {
+    /// Shown as "[default]" after the prompt, and returned when the line is empty
+    default: ?[]const u8 = null,
+    /// Returns an error message to print when `line` is not acceptable, in which
+    /// case the prompt is shown again. The default value is validated too.
+    validate: ?*const fn (line: []const u8) ?[]const u8 = null,
+    /// Give up with `error.TooManyAttempts` after this many rejected lines
+    max_attempts: ?usize = null,
+    prompt_style: ?StyleOptions = null,
+    hint_style: ?StyleOptions = null,
+    error_style: ?StyleOptions = null,
+};
+
+fn writeStyled(writer: *std.Io.Writer, style: ?StyleOptions, text: []const u8) !void {
+    if (style) |st| {
+        try writeStylePrefix(writer, st);
+        try writer.writeAll(text);
+        try writer.writeAll(reset);
+    } else try writer.writeAll(text);
+}
+
+/// Shows `prompt` and reads one line, re-prompting until it passes
+/// `options.validate`. The result points into the reader's buffer (or is
+/// `options.default`) and is only valid until the next read.
+fn promptLine(
+    reader: *std.Io.Reader,
+    writer: *std.Io.Writer,
+    prompt: []const u8,
+    options: InputOptions,
+) InputError![]const u8 {
+    var attempts: usize = 0;
+    while (true) {
+        try writeStyled(writer, options.prompt_style, prompt);
+        if (options.default) |d| {
+            if (prompt.len > 0 and prompt[prompt.len - 1] != ' ') try writer.writeByte(' ');
+            try writer.writeByte('[');
+            try writeStyled(writer, options.hint_style, d);
+            try writer.writeAll("] ");
+        }
+        // The prompt must be visible before blocking on the read
+        try writer.flush();
+
+        const raw = (try reader.takeDelimiter('\n')) orelse return error.EndOfStream;
+        var line: []const u8 = if (raw.len > 0 and raw[raw.len - 1] == '\r') raw[0 .. raw.len - 1] else raw;
+        if (line.len == 0) {
+            if (options.default) |d| line = d;
+        }
+
+        const validate = options.validate orelse return line;
+        const message = validate(line) orelse return line;
+        try writeStyled(writer, options.error_style, message);
+        try writer.writeByte('\n');
+        attempts += 1;
+        if (options.max_attempts) |max| {
+            if (attempts >= max) return error.TooManyAttempts;
+        }
+    }
+}
+
+/// Prompts for a line of input, like Python's `input()`: the prompt is written
+/// and flushed, then a line is read and stripped of its line ending. The caller
+/// owns the returned slice.
+///
+/// Returns `error.EndOfStream` when no more input is available.
+pub fn readInput(
+    allocator: Allocator,
+    reader: *std.Io.Reader,
+    writer: *std.Io.Writer,
+    prompt: []const u8,
+    options: InputOptions,
+) (InputError || Allocator.Error)![]u8 {
+    return allocator.dupe(u8, try promptLine(reader, writer, prompt, options));
+}
+
+/// Same as `readInput`, but copies the line into `buf` instead of allocating.
+pub fn readInputBuf(
+    buf: []u8,
+    reader: *std.Io.Reader,
+    writer: *std.Io.Writer,
+    prompt: []const u8,
+    options: InputOptions,
+) (InputError || error{NoSpaceLeft})![]u8 {
+    const line = try promptLine(reader, writer, prompt, options);
+    if (line.len > buf.len) return error.NoSpaceLeft;
+    @memcpy(buf[0..line.len], line);
+    return buf[0..line.len];
+}
+
+fn testNotEmptyNotBad(line: []const u8) ?[]const u8 {
+    if (line.len == 0) return "empty";
+    if (std.mem.eql(u8, line, "bad")) return "nope";
+    return null;
+}
+
+test "input: strips line endings and shows the prompt" {
+    const alloc = std.testing.allocator;
+    var out_buf: [256]u8 = undefined;
+    var out = std.Io.Writer.fixed(&out_buf);
+    var in = std.Io.Reader.fixed("alice\r\nbob\n\nlast");
+
+    const a = try readInput(alloc, &in, &out, "Name: ", .{});
+    defer alloc.free(a);
+    try std.testing.expectEqualStrings("alice", a);
+    try std.testing.expectEqualStrings("Name: ", out.buffered());
+
+    const b = try readInput(alloc, &in, &out, "", .{});
+    defer alloc.free(b);
+    try std.testing.expectEqualStrings("bob", b);
+
+    const empty = try readInput(alloc, &in, &out, "", .{});
+    defer alloc.free(empty);
+    try std.testing.expectEqualStrings("", empty);
+
+    // final line without a newline is still returned, then EOF
+    const last = try readInput(alloc, &in, &out, "", .{});
+    defer alloc.free(last);
+    try std.testing.expectEqualStrings("last", last);
+    try std.testing.expectError(error.EndOfStream, readInput(alloc, &in, &out, "", .{}));
+}
+
+test "input: default value is hinted and used on empty line" {
+    var out_buf: [256]u8 = undefined;
+    var out = std.Io.Writer.fixed(&out_buf);
+    var in = std.Io.Reader.fixed("\nbob\n");
+    var buf: [16]u8 = undefined;
+
+    const first = try readInputBuf(&buf, &in, &out, "Name:", .{ .default = "anon" });
+    try std.testing.expectEqualStrings("anon", first);
+    try std.testing.expectEqualStrings("Name: [anon] ", out.buffered());
+
+    const second = try readInputBuf(&buf, &in, &out, "Name:", .{ .default = "anon" });
+    try std.testing.expectEqualStrings("bob", second);
+}
+
+test "input: styled prompt, hint and error" {
+    var out_buf: [512]u8 = undefined;
+    var out = std.Io.Writer.fixed(&out_buf);
+    var in = std.Io.Reader.fixed("bad\nok\n");
+    var buf: [16]u8 = undefined;
+
+    const line = try readInputBuf(&buf, &in, &out, "> ", .{
+        .default = "d",
+        .validate = testNotEmptyNotBad,
+        .prompt_style = .{ .bold = true },
+        .hint_style = .{ .dim = true },
+        .error_style = .{ .text_color = .red },
+    });
+    try std.testing.expectEqualStrings("ok", line);
+
+    const def_bg = comptime AnsiColorCodes.default.asBackground();
+    const def_fg = comptime AnsiColorCodes.default.asText();
+    const prompt = bold ++ def_bg ++ def_fg ++ "> " ++ reset ++
+        "[" ++ dim ++ def_bg ++ def_fg ++ "d" ++ reset ++ "] ";
+    const err = def_bg ++ comptime AnsiColorCodes.red.asText() ++ "nope" ++ reset ++ "\n";
+    try std.testing.expectEqualStrings(prompt ++ err ++ prompt, out.buffered());
+}
+
+test "input: validation retries and gives up" {
+    var out_buf: [512]u8 = undefined;
+    var out = std.Io.Writer.fixed(&out_buf);
+    var buf: [16]u8 = undefined;
+
+    var in = std.Io.Reader.fixed("\nbad\ngood\n");
+    const line = try readInputBuf(&buf, &in, &out, "? ", .{ .validate = testNotEmptyNotBad });
+    try std.testing.expectEqualStrings("good", line);
+    try std.testing.expectEqualStrings("? empty\n? nope\n? ", out.buffered());
+
+    var in2 = std.Io.Reader.fixed("bad\nbad\ngood\n");
+    try std.testing.expectError(
+        error.TooManyAttempts,
+        readInputBuf(&buf, &in2, &out, "? ", .{ .validate = testNotEmptyNotBad, .max_attempts = 2 }),
+    );
+
+    // EOF while retrying
+    var in3 = std.Io.Reader.fixed("bad\n");
+    try std.testing.expectError(
+        error.EndOfStream,
+        readInputBuf(&buf, &in3, &out, "? ", .{ .validate = testNotEmptyNotBad }),
+    );
+}
+
+test "input: buffer too small" {
+    var out_buf: [64]u8 = undefined;
+    var out = std.Io.Writer.fixed(&out_buf);
+    var in = std.Io.Reader.fixed("toolong\n");
+    var buf: [3]u8 = undefined;
+    try std.testing.expectError(error.NoSpaceLeft, readInputBuf(&buf, &in, &out, "", .{}));
+}
+
+test "input: RichWriter uses palette styles" {
+    const alloc = std.testing.allocator;
+    var out_buf: [512]u8 = undefined;
+    var out = std.Io.Writer.fixed(&out_buf);
+    var in = std.Io.Reader.fixed("x\n");
+    const rich: RichWriter = .{ .writer = &out };
+
+    const line = try rich.getInput(alloc, &in, "Value {d}: ", .{1}, .{});
+    defer alloc.free(line);
+    try std.testing.expectEqualStrings("x", line);
+    try std.testing.expect(std.mem.indexOf(u8, out.buffered(), "Value 1: ") != null);
+    try std.testing.expect(std.mem.endsWith(u8, out.buffered(), reset));
 }
 
 // Base color palettes

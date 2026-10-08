@@ -9,6 +9,7 @@ const examples = &.{
     "tests",
     "table",
     "progress",
+    "input",
 };
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
@@ -39,6 +40,9 @@ pub fn build(b: *std.Build) void {
             .{ .name = "styling", .module = styling_module },
         },
     });
+    const interactive_module = b.addModule("interactive", .{
+        .root_source_file = b.path("src/interactive.zig"),
+    });
 
     const examples_step = b.step("examples", "Run examples");
 
@@ -56,6 +60,7 @@ pub fn build(b: *std.Build) void {
         });
         example.root_module.addImport("parser", parser_module);
         example.root_module.addImport("styling", styling_module);
+        example.root_module.addImport("interactive", interactive_module);
         b.installArtifact(example);
         const run_example_step = b.step(example_name, "Run " ++ example_name);
         const example_run = b.addRunArtifact(example);
@@ -72,6 +77,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_lib_unit_tests = b.addRunArtifact(mod_tests);
+    run_lib_unit_tests.has_side_effects = true; // always re-run tests
 
     // Similar to creating the run step earlier, this exposes a `test` step to
     // the `zig build --help` menu, providing a way for the user to request
@@ -83,7 +89,15 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const interactive_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/interactive.zig"),
+            .target = target,
+        }),
+    });
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(styling_tests).step);
+    test_step.dependOn(&b.addRunArtifact(interactive_tests).step);
     test_step.dependOn(&run_lib_unit_tests.step);
 }
