@@ -628,6 +628,10 @@ const CliContext = struct {
     headline: ?[]const u8 = null,
     welcome_msg: ?[]const u8 = null,
     show_builtin_help: bool = false,
+    /// Custom error handler: replaces the default error display
+    /// and returns the exit code of the process.
+    /// It receives a rich writer to print with the usual styling
+    err_handler: ?*const fn (CliError, RichWriter) u8 = null,
 };
 
 const ParserType = *const fn (*anyopaque, arg_it: *ArgIterator, error_payload: ?*ParamErrPayload) CliError!void;
@@ -1255,14 +1259,14 @@ pub fn CliParser(comptime ctx: CliContext) type {
             var file_writer = stdout.writer(io, &.{});
             const writer: *std.Io.Writer = if (custom_writer) |w| w else &file_writer.interface;
             var params = Self.parse(custom_arg_it, &err_payload) catch |e| {
-                displayError(e, err_payload, writer);
+                handleError(e, err_payload, writer);
                 return null;
             };
             if (params.builtin.use_file) |fpath| {
                 // we have to save the cli_name so we have to reparse
                 const cli_name = params.builtin.cli_name;
                 params = Self.loadFromJsonFile(io, fpath, std.heap.page_allocator) catch {
-                    displayError(CliError.InvalidJSON, err_payload, writer);
+                    handleError(CliError.InvalidJSON, err_payload, writer);
                     return null;
                 };
                 params.builtin.cli_name = params.builtin.cli_name orelse cli_name;
@@ -1270,7 +1274,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
             const user_palette = styling.palettes.get(params.builtin.palette) orelse {
                 err_payload.field_name = "palette";
                 err_payload.value_str = params.builtin.palette;
-                displayError(CliError.UnknownPalette, err_payload, writer);
+                handleError(CliError.UnknownPalette, err_payload, writer);
                 return null;
             };
             var rich_writer = RichWriter{
@@ -1297,6 +1301,17 @@ pub fn CliParser(comptime ctx: CliContext) type {
             // deliberately do not call `it.deinit()` here.
             var it = try init.minimal.args.iterateAllocator(init.arena.allocator());
             return runStandaloneWithOptions(init.io, &it, null);
+        }
+
+        /// Delegates the error to `ctx.err_handler` and exits the process
+        /// with the code it returns. Without handler, shows the error to the end user
+        pub fn handleError(err: CliError, err_payload: ParamErrPayload, writer: *std.Io.Writer) void {
+            if (ctx.err_handler) |handler| {
+                const exit_code = handler(err, RichWriter{ .writer = writer });
+                writer.flush() catch {};
+                std.process.exit(exit_code);
+            }
+            displayError(err, err_payload, writer);
         }
 
         /// Shows an error to the end user
