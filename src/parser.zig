@@ -954,6 +954,8 @@ pub fn CliParser(comptime ctx: CliContext) type {
             var current_arg_name: []const u8 = "";
             var arg_idx: usize = 0;
             var subcmd_seen = false;
+            // True when the last flag was a boolean one, whose value is optional
+            var bool_flag_pending = false;
 
             // If no explicit client name was passed,using process name
             if (pname) |name| {
@@ -969,6 +971,14 @@ pub fn CliParser(comptime ctx: CliContext) type {
                 // consume will be set to false if we have an argument
                 defer next_arg = if (consume) arg_it.next() else next_arg;
 
+                if (flag_type != null and bool_flag_pending and
+                    !std.mem.eql(u8, arg, "true") and !std.mem.eql(u8, arg, "false"))
+                {
+                    // Boolean flag without explicit value: the flag was already
+                    // set to true, so process this argument as a regular one.
+                    flag_type = null;
+                }
+                bool_flag_pending = false;
                 if (flag_type) |_| {
                     consume = true;
                     defer flag_type = null;
@@ -1009,6 +1019,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
 
                     continue;
                 }
+                consume = true;
                 flag_type = .Argument;
                 var arg_name_start_idx: usize = 0;
                 for (arg) |char| {
@@ -1046,6 +1057,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
                         };
                         if (try isFlag(current_arg_name)) {
                             try self.parseFlag(current_arg_name);
+                            bool_flag_pending = true;
                         }
                     },
                     .LongFlag => {
@@ -1063,6 +1075,7 @@ pub fn CliParser(comptime ctx: CliContext) type {
                         };
                         if (is_flag) {
                             try self.parseFlag(current_arg_name);
+                            bool_flag_pending = true;
                         }
                     },
                 }
@@ -1446,6 +1459,19 @@ test "parse boolean flag" {
     };
     const params = try CliParser(.{ .opts = Options }).parse(&arguments, null);
     try std.testing.expect(params.options.enable);
+}
+
+test "boolean flag followed by another flag or explicit value" {
+    const Options = struct { stats: bool = false, name: []const u8 = "", other: bool = true };
+    var it1 = std.mem.splitSequence(u8, "testcli --stats --name foo --other false", " ");
+    const p1 = try CliParser(.{ .opts = Options }).parse(&it1, null);
+    try std.testing.expect(p1.options.stats);
+    try std.testing.expectEqualStrings("foo", p1.options.name);
+    try std.testing.expect(!p1.options.other);
+    var it2 = std.mem.splitSequence(u8, "testcli --stats --help", " ");
+    const p2 = try CliParser(.{ .opts = Options }).parse(&it2, null);
+    try std.testing.expect(p2.options.stats);
+    try std.testing.expect(p2.builtin.help);
 }
 
 test "parse choices valid case" {
