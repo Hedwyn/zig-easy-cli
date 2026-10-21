@@ -22,6 +22,7 @@ pub fn main(init: std.process.Init) !void {
         .label = "Downloading",
         .width = 40,
         .interactive = interactive,
+        .io = io,
     });
     try bar.start();
     for (0..total) |i| {

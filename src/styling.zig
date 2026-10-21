@@ -747,6 +747,9 @@ pub const ProgressOptions = struct {
     /// nothing is drawn until `finish`, which prints a single plain line.
     interactive: bool = true,
     hide_cursor: bool = true,
+    /// Clock source for the estimated remaining time. Without it, no timing is shown.
+    io: ?std.Io = null,
+    show_eta: bool = true,
 };
 
 // Left-aligned partial blocks, from 1/8 to 7/8 of a cell
@@ -768,7 +771,10 @@ pub const ProgressBar = struct {
     options: ProgressOptions,
     current: u64 = 0,
     started: bool = false,
-    last_drawn: ?[3]u64 = null,
+    last_drawn: ?[4]u64 = null,
+    start_time: std.Io.Timestamp = .zero,
+    /// Time spent since `start`, refreshed on each redraw
+    elapsed_ns: u64 = 0,
 
     pub fn init(writer: *std.Io.Writer, options: ProgressOptions) ProgressBar {
         return .{ .writer = writer, .options = options };
@@ -776,6 +782,7 @@ pub const ProgressBar = struct {
 
     pub fn start(self: *ProgressBar) !void {
         self.started = true;
+        if (self.options.io) |io| self.start_time = std.Io.Timestamp.now(io, .awake);
         if (!self.options.interactive) return;
         if (self.options.hide_cursor) try self.writer.writeAll(hide_cursor_seq);
         try self.draw();
@@ -835,12 +842,33 @@ pub const ProgressBar = struct {
         return @intCast(@as(u128, self.current) * 100 / self.options.total);
     }
 
+    fn refreshElapsed(self: *ProgressBar) void {
+        const io = self.options.io orelse return;
+        const elapsed = self.start_time.durationTo(std.Io.Timestamp.now(io, .awake)).nanoseconds;
+        self.elapsed_ns = @intCast(@max(elapsed, 0));
+    }
+
+    fn showsEta(self: ProgressBar) bool {
+        return self.options.show_eta and self.options.io != null;
+    }
+
+    /// Estimated remaining seconds, extrapolated from the average pace so far.
+    /// Null until there is some progress to extrapolate from.
+    fn etaSeconds(self: ProgressBar) ?u64 {
+        if (self.current == 0 or self.elapsed_ns == 0) return null;
+        const remaining = self.options.total - self.current;
+        const eta_ns = @as(u128, self.elapsed_ns) * remaining / self.current;
+        return @intCast((eta_ns + std.time.ns_per_s / 2) / std.time.ns_per_s);
+    }
+
     fn draw(self: *ProgressBar) !void {
+        self.refreshElapsed();
         // Skip redraws that would not change anything visible
-        const key = [3]u64{
+        const key = [4]u64{
             self.eighths(),
             if (self.options.show_percent) self.percent() else 0,
             if (self.options.show_count) self.current else 0,
+            if (self.showsEta()) self.etaSeconds() orelse std.math.maxInt(u64) else 0,
         };
         if (self.last_drawn) |last| {
             if (std.mem.eql(u64, &last, &key)) return;
@@ -874,7 +902,28 @@ pub const ProgressBar = struct {
 
         if (opts.show_percent) try writer.print(" {d:>3}%", .{self.percent()});
         if (opts.show_count) try writer.print(" {d}/{d}", .{ self.current, opts.total });
+        if (self.showsEta()) {
+            if (self.current >= opts.total) {
+                try writer.print(" in {f}", .{Clock{ .seconds = self.elapsed_ns / std.time.ns_per_s }});
+            } else if (self.etaSeconds()) |eta| {
+                try writer.print(" ETA {f}", .{Clock{ .seconds = eta }});
+            } else try writer.writeAll(" ETA --:--");
+        }
     }
+
+    /// Formats seconds as `m:ss`, or `h:mm:ss` from one hour
+    const Clock = struct {
+        seconds: u64,
+
+        pub fn format(self: Clock, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+            const h = self.seconds / 3600;
+            const m = self.seconds / 60 % 60;
+            const s = self.seconds % 60;
+            if (h > 0) {
+                try writer.print("{d}:{d:0>2}:{d:0>2}", .{ h, m, s });
+            } else try writer.print("{d}:{d:0>2}", .{ m, s });
+        }
+    };
 };
 
 test "progress bar: smooth sub-cell fill" {
@@ -903,6 +952,38 @@ test "progress bar: smooth sub-cell fill" {
     bar.current = 16;
     try bar.writeBody(&w);
     try std.testing.expectEqualStrings(head ++ "████████" ++ reset ++ " 100%", w.buffered());
+}
+
+test "progress bar: estimated remaining time" {
+    var buf: [512]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    // `io` only needs to be set for timing to be shown: the test feeds `elapsed_ns` itself
+    var bar = ProgressBar.init(&w, .{ .total = 100, .width = 2, .show_percent = false, .show_count = false, .io = std.testing.io });
+
+    try bar.writeBody(&w);
+    try std.testing.expect(std.mem.endsWith(u8, w.buffered(), " ETA --:--"));
+
+    _ = w.consumeAll();
+    bar.current = 25;
+    bar.elapsed_ns = 10 * std.time.ns_per_s; // 3x the elapsed time remains
+    try bar.writeBody(&w);
+    try std.testing.expect(std.mem.endsWith(u8, w.buffered(), " ETA 0:30"));
+
+    _ = w.consumeAll();
+    bar.elapsed_ns = 3600 * std.time.ns_per_s;
+    try bar.writeBody(&w);
+    try std.testing.expect(std.mem.endsWith(u8, w.buffered(), " ETA 3:00:00"));
+
+    _ = w.consumeAll();
+    bar.current = 100;
+    bar.elapsed_ns = 75 * std.time.ns_per_s;
+    try bar.writeBody(&w);
+    try std.testing.expect(std.mem.endsWith(u8, w.buffered(), " in 1:15"));
+
+    _ = w.consumeAll();
+    bar.options.show_eta = false;
+    try bar.writeBody(&w);
+    try std.testing.expect(std.mem.indexOf(u8, w.buffered(), "ETA") == null);
 }
 
 test "progress bar: log goes above the bar, which is redrawn below" {
