@@ -462,47 +462,51 @@ pub fn _buildShortFlagMap(
     var kv_pairs: [struct_fields.len]_KVType = undefined;
     var kv_len: usize = 0;
 
-    // pre-filling with the short flags that are set explicitly
-    for (options_info) |opt| {
-        if (opt.short_name) |flag| {
+    // registering the short flags that are set explicitly first,
+    // so that the derived ones of the other options steer clear of them
+    inline for (struct_fields) |field| {
+        const explicit_flag = if (getOptionInfo(field.name, options_info)) |opt| opt.short_name else null;
+        if (explicit_flag) |flag| {
+            for (kv_pairs[0..kv_len]) |kv| {
+                if (std.mem.eql(u8, kv.@"0", flag)) {
+                    @compileError("Duplicate flag found");
+                }
+            }
             kv_pairs[kv_len].@"0" = flag;
-            kv_pairs[kv_len].@"1" = opt.short_name;
+            kv_pairs[kv_len].@"1" = field.name;
             kv_len += 1;
         }
     }
 
     inline for (struct_fields) |field| {
-        var slice_index: usize = 1;
-        const option_info = getOptionInfo(field.name, options_info);
-        // Checking if the short flag has been explcitly set
-        const explicit_short_flag = if (option_info) |opt| opt.short_name else null;
-        // else starting from the first letter of the name
-        var short_flag: []const u8 = explicit_short_flag orelse field.name[0..1];
-        var is_unique = false;
-        while (!is_unique) {
-            // checking if that short flag is unique
-            for (kv_pairs[0..kv_len]) |kv| {
-                if (std.mem.eql(u8, kv.@"0", short_flag)) {
-                    // flag already exists
+        const has_explicit_flag = if (getOptionInfo(field.name, options_info)) |opt| opt.short_name != null else false;
+        if (!has_explicit_flag) {
+            var slice_index: usize = 1;
+            // starting from the first letter of the name
+            var short_flag: []const u8 = field.name[0..1];
+            var is_unique = false;
+            while (!is_unique) {
+                // checking if that short flag is unique
+                for (kv_pairs[0..kv_len]) |kv| {
+                    if (std.mem.eql(u8, kv.@"0", short_flag)) {
+                        // flag already exists
+                        break;
+                    }
+                } else {
+                    is_unique = true;
                     break;
                 }
-            } else {
-                is_unique = true;
-                break;
+                // if not unique, taking on more letter of the name
+                slice_index += 1;
+                if (slice_index == field.name.len) {
+                    @compileError("Duplicate option name found");
+                }
+                short_flag = field.name[0..slice_index];
             }
-            // if not unique, taking on more letter of the name
-            if (explicit_short_flag) |_| {
-                @compileError("Duplicate flag found");
-            }
-            slice_index += 1;
-            if (slice_index == field.name.len) {
-                @compileError("Duplicate option name found");
-            }
-            short_flag = field.name[0..slice_index];
+            kv_pairs[kv_len].@"0" = short_flag;
+            kv_pairs[kv_len].@"1" = field.name;
+            kv_len += 1;
         }
-        kv_pairs[kv_len].@"0" = short_flag;
-        kv_pairs[kv_len].@"1" = field.name;
-        kv_len += 1;
     }
     return kv_pairs;
 }
@@ -531,6 +535,21 @@ pub fn buildShortFlagMap(
         reversed_kv_pairs[i].@"1" = kv.@"0";
     }
     return std.StaticStringMap([]const u8).initComptime(reversed_kv_pairs);
+}
+
+test "build short flag map with explicit flags" {
+    const TestOptions = struct {
+        abcde: u32 = 42, // explicit -z
+        abd: bool = false, // expects -a, as -z is taken by abcde
+        cba: []const u8 = "Hello", // expects -c
+    };
+    const short_flag_map = buildShortFlagMap(comptime structFields(TestOptions), &.{
+        .{ .name = "abcde", .short_name = "z" },
+    }, false);
+    try std.testing.expectEqualStrings("abcde", short_flag_map.get("z").?);
+    try std.testing.expectEqualStrings("abd", short_flag_map.get("a").?);
+    try std.testing.expectEqualStrings("cba", short_flag_map.get("c").?);
+    try std.testing.expect(short_flag_map.get("ab") == null);
 }
 
 test "build short flag map" {
