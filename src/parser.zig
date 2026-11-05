@@ -452,6 +452,13 @@ pub inline fn getArgInfo(arg_name: []const u8, args_info: []const ArgInfo) ?ArgI
     return null;
 }
 
+/// Branch quota for the comptime tables built over `option_count` options:
+/// short flag uniqueness checks and map sorting are quadratic in the option
+/// count, and exceed the default quota from ~16 options on.
+fn evalBranchQuota(comptime option_count: usize) u32 {
+    return 1000 + 200 * option_count * option_count;
+}
+
 /// Key-value pairs types for short flag maps
 const _KVType = struct { []const u8, []const u8 };
 
@@ -525,6 +532,7 @@ pub fn buildShortFlagMap(
     comptime options_info: []const OptionInfo,
     comptime reverse: bool,
 ) std.StaticStringMap([]const u8) {
+    @setEvalBranchQuota(evalBranchQuota(struct_fields.len));
     const kv_pairs = comptime _buildShortFlagMap(struct_fields, options_info);
     if (!reverse) {
         return std.StaticStringMap([]const u8).initComptime(kv_pairs);
@@ -612,6 +620,7 @@ pub fn buildOptionInfoMap(
     comptime option_fields: []const StructField,
     comptime options_info: []const OptionInfo,
 ) std.StaticStringMap(OptionInternalInfo) {
+    @setEvalBranchQuota(evalBranchQuota(option_fields.len));
     const options_parsed_info = parseOptionInfo(option_fields, options_info);
     var kv_pairs: [options_parsed_info.len]struct { []const u8, OptionInternalInfo } = undefined;
     for (0.., options_parsed_info) |i, opt| {
